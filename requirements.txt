@@ -1,0 +1,21 @@
+# ---- Core ----
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# ---- Database ----
+SQLAlchemy==2.0.35
+psycopg[binary]==3.2.1
+alembic==1.13.2
+
+# ---- Validation & Settings ----
+pydantic==2.12.0
+pydantic-settings==2.6.0
+
+# ---- Utils ----
+python-dotenv==1.0.1
+
+# ---- Dev / Lint / Test ----
+ruff==0.6.8
+black==24.10.0
+pytest==8.3.3
+httpx==0.27.2
