@@ -1,3 +1,4 @@
+#app\schemas\issue.py
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from datetime import datetime
@@ -22,6 +23,9 @@ class IssueOut(BaseModel):
     lng: Optional[float]
     address: Optional[str]
     created_at: datetime
-
-    class Config:
+    photos: list[str] = []  
+    class Config: 
         from_attributes = True
+
+class IssueStatusPatch(BaseModel):
+    status: Status

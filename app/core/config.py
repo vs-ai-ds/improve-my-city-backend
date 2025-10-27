@@ -1,15 +1,29 @@
-# app/core/config.py
+# File: app\core\config.py
+# Project: improve-my-city-backend
+# Auto-added for reference
+
 from typing import List
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
-    BACKEND_CORS_ORIGINS: str = "http://localhost:5173"
+    # env vars (with aliases) — read from process + .env
+    database_url: str = Field(..., alias="DATABASE_URL")
+    jwt_secret: str = Field(..., alias="JWT_SECRET")  # <-- IMPORTANT
+    backend_cors_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173",
+        alias="BACKEND_CORS_ORIGINS",
+    )
 
-    # Pydantic v2 settings config
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-
-settings = Settings()
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
 def cors_origins_list() -> List[str]:
-    return [o.strip() for o in settings.BACKEND_CORS_ORIGINS.split(",") if o.strip()]
+    raw = settings.backend_cors_origins or ""
+    return [x.strip().rstrip("/") for x in raw.split(",") if x.strip()]
+
+settings = Settings()

@@ -1,13 +1,22 @@
+# File: alembic\env.py
+# Project: improve-my-city-backend
+# Auto-added for reference
+
+
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 import os
 
-
 from dotenv import load_dotenv
 load_dotenv()
 
-from app.models.issue import Base
+from app.db.base import Base
+from app.models.user import User, UserRole
+from app.models.issue_type import IssueType
+from app.models.issue import Issue, IssueStatus
+from app.models.attachment import IssueAttachment
+from app.models.app_settings import AppSettings
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config

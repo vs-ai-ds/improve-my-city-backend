@@ -1,3 +1,7 @@
+# File: test_con.py
+# Project: improve-my-city-backend
+# Auto-added for reference
+
 from dotenv import load_dotenv
 import os
 from sqlalchemy import create_engine, text

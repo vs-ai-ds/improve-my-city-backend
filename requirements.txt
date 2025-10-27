@@ -19,3 +19,14 @@ ruff==0.14.2
 black==25.9.0
 pytest==8.4.2
 httpx==0.28.1
+
+slowapi==0.1.9
+
+passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
+PyJWT==2.10.1
+structlog==25.4.0
+resend==2.17.0
+pywebpush==2.1.1
+email-validator==2.3.0
+python-multipart==0.0.20
