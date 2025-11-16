@@ -29,3 +29,9 @@ class IssueOut(BaseModel):
 
 class IssueStatusPatch(BaseModel):
     status: Status
+
+class PaginatedIssuesOut(BaseModel):
+    items: list[IssueOut]
+    total: int
+    offset: int
+    limit: int

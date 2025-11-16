@@ -12,23 +12,36 @@ router = APIRouter(prefix="/admin/settings", tags=["admin-settings"])
 
 @router.get("", dependencies=[Depends(require_role("admin","super_admin"))])
 def get_settings(db: Session = Depends(get_db)):
+    from datetime import datetime
     s = db.query(AppSettings).first()
     if not s:
         s = AppSettings()
         db.add(s); db.commit(); db.refresh(s)
     return {
         "allow_anonymous_reporting": s.allow_anonymous_reporting,
-        "allow_open_admin_registration": s.allow_open_admin_registration,
-        "email_from_name": s.email_from_name,
-        "email_from_address": s.email_from_address,
+        "require_email_verification": s.require_email_verification,
+        "admin_open_registration": s.admin_open_registration,
+        "email_from": s.email_from,
+        "features": s.features or {},
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
 
 @router.put("", dependencies=[Depends(require_role("super_admin"))])
 def update_settings(payload: dict, db: Session = Depends(get_db)):
+    from datetime import datetime
     s = db.query(AppSettings).first()
     if not s:
         s = AppSettings(); db.add(s)
-    for k in ["allow_anonymous_reporting","allow_open_admin_registration","email_from_name","email_from_address"]:
-        if k in payload: setattr(s, k, payload[k])
+    if "allow_anonymous_reporting" in payload:
+        s.allow_anonymous_reporting = bool(payload["allow_anonymous_reporting"])
+    if "require_email_verification" in payload:
+        s.require_email_verification = bool(payload["require_email_verification"])
+    if "admin_open_registration" in payload:
+        s.admin_open_registration = bool(payload["admin_open_registration"])
+    if "email_from" in payload:
+        s.email_from = payload["email_from"] or None
+    if "features" in payload:
+        s.features = payload["features"] or {}
+    s.updated_at = datetime.utcnow()
     db.commit(); db.refresh(s)
     return {"ok": True}

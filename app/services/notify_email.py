@@ -32,3 +32,21 @@ def send_status_update(to_email: str, issue_id: int, status: str):
     if not resend.api_key: return
     html = TPL_BASE % (f"<p>Your issue <b>#{issue_id}</b> status is now <b>{status.replace('_',' ')}</b>.</p>")
     resend.Emails.send({"from": f"{FROM_NAME} <{FROM_ADDR}>","to":[to_email],"subject":f"Issue #{issue_id} status update","html": html})
+
+def send_report_confirmation(to_email: str, issue_id: int, title: str):
+    """Send confirmation email when a report is submitted."""
+    if not resend.api_key: return
+    link = f"{os.getenv('FRONTEND_BASE_URL','')}/issues/{issue_id}"
+    html = TPL_BASE % (
+        f"<p>Thank you for reporting an issue!</p>"
+        f"<p><b>Ticket #:</b> {issue_id}</p>"
+        f"<p><b>Title:</b> {title}</p>"
+        f"<p>We've received your report and will keep you updated on its progress. "
+        f"You can view it <a href='{link}'>here</a>.</p>"
+    )
+    resend.Emails.send({
+        "from": f"{FROM_NAME} <{FROM_ADDR}>",
+        "to": [to_email],
+        "subject": f"Report submitted - Ticket #{issue_id}",
+        "html": html
+    })

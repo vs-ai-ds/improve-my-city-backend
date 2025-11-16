@@ -1,21 +1,19 @@
-# File: app/core/security.py
-from fastapi import HTTPException, status, Depends, Request
+# app/core/security.py
+from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 import time, jwt
+from datetime import timedelta
+from sqlalchemy.orm import Session
 from app.core.config import settings
 from passlib.hash import bcrypt_sha256
-from datetime import datetime, timezone, timedelta
-from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.models.user import User  # adjust import if your model path differs
-
+from app.models.user import User
 
 ALGO = "HS256"
 ACCESS_TTL = 15 * 60
 REFRESH_TTL = 7 * 24 * 3600
-bearer = HTTPBearer(auto_error=False) 
-
+bearer = HTTPBearer(auto_error=False)
 
 def hash_password(raw: str) -> str:
     return bcrypt_sha256.hash(raw)
@@ -36,22 +34,22 @@ def make_tokens(email: str, role: str) -> dict:
         "expires_in": ACCESS_TTL,
     }
 
-def get_current_user(
-    creds = Depends(bearer),  # reuse your existing 'bearer = HTTPBearer(auto_error=False)'
-    db: Session = Depends(get_db),
-):
-    token = creds.credentials if creds else None
-    if not token:
+def _decode_token(creds: Optional[HTTPAuthorizationCredentials]) -> dict:
+    if not creds:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[ALGO])
+        return jwt.decode(creds.credentials, settings.jwt_secret, algorithms=[ALGO])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
+def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+                     db: Session = Depends(get_db)) -> User:
+    payload = _decode_token(creds)
     email = payload.get("sub")
     if not email:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-
     user = db.query(User).filter(User.email == email).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
@@ -59,39 +57,29 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user_inactive")
     return user
 
-def require_verified_user(user=Depends(get_current_user)):
-    if not user.is_verified:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="email_not_verified")
-    return user
-
-
-def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
-    if not creds:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    token = creds.credentials
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[ALGO])
-        return {"email": payload["sub"], "role": payload["role"]}
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
-def get_optional_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
+def get_optional_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+                      db: Session = Depends(get_db)) -> Optional[User]:
     if not creds:
         return None
-    token = creds.credentials
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[ALGO])
-        return {"email": payload["sub"], "role": payload["role"]}
+        payload = jwt.decode(creds.credentials, settings.jwt_secret, algorithms=[ALGO])
+        email = payload.get("sub")
+        if not email:
+            return None
+        return db.query(User).filter(User.email == email).first()
     except Exception:
-        # treat bad token same as anonymous for optional flow
         return None
 
 def require_role(*roles):
-    def _dep(user=Depends(get_current_user)):
-        if user.role not in roles:
+    from app.models.user import UserRole
+    role_values = [r.value if isinstance(r, UserRole) else r for r in roles]
+    def _dep(user: User = Depends(get_current_user)):
+        if user.role.value not in role_values:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
         return user
     return _dep
+
+def require_verified_user(user: User = Depends(get_current_user)):
+    if not user.is_verified:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="email_not_verified")
+    return user

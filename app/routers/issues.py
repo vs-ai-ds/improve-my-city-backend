@@ -1,17 +1,19 @@
 # File: app/routers/issues.py
-from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File, Request, Form
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.db.session import get_db
 from app.models.issue import Issue, IssueStatus
-from app.schemas.issue import IssueCreate, IssueOut
+from app.schemas.issue import IssueCreate, IssueOut, PaginatedIssuesOut
 from app.core.ratelimit import limiter
 from app.models.attachment import IssueAttachment
+from app.models.issue_activity import IssueActivity, ActivityKind
 from app.services.storage import upload_image, make_object_key
 from app.models.region import StaffRegion
 from app.models.user import User, UserRole
 from app.core.security import get_current_user, get_optional_user, require_verified_user
 from sqlalchemy import func, text
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/issues", tags=["issues"])
 
@@ -19,48 +21,139 @@ MAX_FILES = 10
 MAX_BYTES = 2 * 1024 * 1024
 ALLOWED = {"image/jpeg","image/png","image/webp","image/gif"}
 
+def _get_issue_photos(db: Session, issue_id: int) -> list[str]:
+    """Helper to fetch photos for an issue."""
+    return [a.url for a in db.query(IssueAttachment).filter_by(issue_id=issue_id).all()]
+
 @router.post("", response_model=IssueOut, status_code=201)
 @limiter.limit("10/minute")
 def create_issue(
     request: Request,
-    payload: IssueCreate = Depends(),
+    title: str = Form(...),
+    description: Optional[str] = Form(None),
+    category: Optional[str] = Form(None),
+    lat: Optional[float] = Form(None),
+    lng: Optional[float] = Form(None),
+    address: Optional[str] = Form(None),
+    country: Optional[str] = Form("IN"),
+    state_code: Optional[str] = Form(None),
     files: List[UploadFile] | None = File(default=None),
     db: Session = Depends(get_db),
     auth = Depends(get_current_user),
 ):
     # IN-only enforcement
-    if payload.country and payload.country.upper() != "IN":
+    if country and country.upper() != "IN":
         raise HTTPException(400, "Only India is supported")
     obj = Issue(
-        title=payload.title.strip(),
-        description=payload.description,
-        category=payload.category,
-        lat=payload.lat, lng=payload.lng, address=payload.address,
+        title=title.strip(),
+        description=description,
+        category=category,
+        lat=lat,
+        lng=lng,
+        address=address,
         status=IssueStatus.pending,
-        country=payload.country or "IN",
-        state_code=payload.__dict__.get("state_code"),
-        created_by_id=None,
+        country="IN",                 
+        state_code=state_code 
     )
+    if obj.lat is not None and obj.lng is not None:
+        if not (6.5 <= obj.lat <= 37.6 and 68.1 <= obj.lng <= 97.4):
+            raise HTTPException(status_code=400, detail="Only India is supported")
     if auth:
-        # set creator if logged in
-        u = db.query(User).filter(User.email == auth["email"]).first()
-        if u: obj.created_by_id = u.id
+        obj.created_by_id = auth.id
 
     db.add(obj); db.commit(); db.refresh(obj)
-    db.execute("insert into issue_activity(issue_id, kind) values (:i,'created')", {"i": obj.id})
+    db.add(IssueActivity(issue_id=obj.id, kind=ActivityKind.created))
     db.commit()
 
-    # round-robin assign staff by state_code
+    from sqlalchemy import func, case
     if obj.state_code:
-        ids = [r[0] for r in (
-            db.query(User.id)
-              .join(StaffRegion, StaffRegion.user_id == User.id)
-              .filter(User.role == UserRole.staff, StaffRegion.state_code == obj.state_code)
-              .order_by(User.id.asc())
-        ).all()]
-        if ids:
-            obj.assigned_to_id = ids[(obj.id - 1) % len(ids)]
-            db.commit()
+        # First try: staff assigned to this state, with least open issues
+        staff_with_counts = (
+            db.query(
+                User.id,
+                func.count(Issue.id).label("open_count")
+            )
+            .join(StaffRegion, StaffRegion.user_id == User.id)
+            .outerjoin(
+                Issue,
+                (Issue.assigned_to_id == User.id) & 
+                (Issue.status.in_([IssueStatus.pending, IssueStatus.in_progress]))
+            )
+            .filter(
+                User.role == UserRole.staff,
+                User.is_active == True,
+                StaffRegion.state_code == obj.state_code
+            )
+            .group_by(User.id)
+            .order_by(func.count(Issue.id).asc(), User.id.asc())
+            .limit(1)
+            .first()
+        )
+        if staff_with_counts:
+            obj.assigned_to_id = staff_with_counts[0]
+        else:
+            # Second try: admin (excluding super_admin) with least open issues
+            admin_with_counts = (
+                db.query(
+                    User.id,
+                    func.count(Issue.id).label("open_count")
+                )
+                .outerjoin(
+                    Issue,
+                    (Issue.assigned_to_id == User.id) & 
+                    (Issue.status.in_([IssueStatus.pending, IssueStatus.in_progress]))
+                )
+                .filter(
+                    User.role == UserRole.admin,
+                    User.is_active == True
+                )
+                .group_by(User.id)
+                .order_by(func.count(Issue.id).asc(), User.id.asc())
+                .limit(1)
+                .first()
+            )
+            if admin_with_counts:
+                obj.assigned_to_id = admin_with_counts[0]
+            else:
+                # Third try: any super_admin
+                super_admin = db.query(User).filter(
+                    User.role == UserRole.super_admin,
+                    User.is_active == True
+                ).first()
+                if super_admin:
+                    obj.assigned_to_id = super_admin.id
+        db.commit()
+    else:
+        # No state_code - try admin with least open issues, then super_admin
+        admin_with_counts = (
+            db.query(
+                User.id,
+                func.count(Issue.id).label("open_count")
+            )
+            .outerjoin(
+                Issue,
+                (Issue.assigned_to_id == User.id) & 
+                (Issue.status.in_([IssueStatus.pending, IssueStatus.in_progress]))
+            )
+            .filter(
+                User.role == UserRole.admin,
+                User.is_active == True
+            )
+            .group_by(User.id)
+            .order_by(func.count(Issue.id).asc(), User.id.asc())
+            .limit(1)
+            .first()
+        )
+        if admin_with_counts:
+            obj.assigned_to_id = admin_with_counts[0]
+        else:
+            super_admin = db.query(User).filter(
+                User.role == UserRole.super_admin,
+                User.is_active == True
+            ).first()
+            if super_admin:
+                obj.assigned_to_id = super_admin.id
+        db.commit()
 
     # images
     if files:
@@ -77,17 +170,40 @@ def create_issue(
             db.add(IssueAttachment(issue_id=obj.id, url=url, content_type=f.content_type, size=len(data)))
         db.commit()
 
-    photos = [a.url for a in db.query(IssueAttachment).filter_by(issue_id=obj.id)]
-    out = IssueOut.model_validate(obj); out.photos = photos
+    photos = _get_issue_photos(db, obj.id)
+    issue_dict = {
+        "id": obj.id,
+        "title": obj.title,
+        "description": obj.description,
+        "category": obj.category,
+        "status": obj.status.value,  # Convert enum to string
+        "lat": obj.lat,
+        "lng": obj.lng,
+        "address": obj.address,
+        "created_at": obj.created_at,
+    }
+    out = IssueOut.model_validate(issue_dict)
+    out.photos = photos
+    
+    if obj.created_by_id:
+        creator = db.query(User).filter(User.id == obj.created_by_id).first()
+        if creator and creator.email:
+            try:
+                from app.services.notify_email import send_report_confirmation
+                send_report_confirmation(creator.email, obj.id, obj.title)
+            except Exception:
+                pass  # Don't fail report creation if email fails
+    
     return out
 
-@router.get("", response_model=List[IssueOut])
+@router.get("", response_model=PaginatedIssuesOut)
 @limiter.limit("20/minute")
 def list_issues(
     request: Request,
     db: Session = Depends(get_db),
     status: Optional[IssueStatus] = Query(default=None),
     category: Optional[str] = Query(default=None),
+    state_code: Optional[str] = Query(default=None),
     bbox: Optional[str] = Query(default=None, description="minLng,minLat,maxLng,maxLat"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -99,6 +215,8 @@ def list_issues(
         q = q.filter(Issue.status == status)
     if category:
         q = q.filter(Issue.category == category)
+    if state_code:
+        q = q.filter(Issue.state_code == state_code)
     if bbox:
         try:
             min_lng, min_lat, max_lng, max_lat = [float(x) for x in bbox.split(",")]
@@ -106,15 +224,37 @@ def list_issues(
             raise HTTPException(status_code=400, detail="Invalid bbox format")
         q = q.filter(Issue.lng >= min_lng, Issue.lng <= max_lng, Issue.lat >= min_lat, Issue.lat <= max_lat)
     if mine_only and auth:
-        u = db.query(User).filter(User.email == auth["email"]).first()
-        if u:
-            q = q.filter(Issue.created_by_id == u.id)
+        q = q.filter(Issue.created_by_id == auth.id)
 
-    q = q.order_by(Issue.created_at.desc()).offset(offset).limit(limit)
-    return q.all()
+    total_count = q.count()
+    issues = q.order_by(Issue.created_at.desc()).offset(offset).limit(limit).all()
+    result = []
+    for issue in issues:
+        photos = _get_issue_photos(db, issue.id)
+        # Convert enum to value for Pydantic validation
+        issue_dict = {
+            "id": issue.id,
+            "title": issue.title,
+            "description": issue.description,
+            "category": issue.category,
+            "status": issue.status.value,
+            "lat": issue.lat,
+            "lng": issue.lng,
+            "address": issue.address,
+            "created_at": issue.created_at,
+        }
+        out = IssueOut.model_validate(issue_dict)
+        out.photos = photos
+        result.append(out)
+    return {
+        "items": result,
+        "total": total_count,
+        "offset": offset,
+        "limit": limit,
+    }
 
 @router.patch("/{issue_id}/status", response_model=IssueOut)
-def update_status(issue_id: int, body: dict, db: Session = Depends(get_db)):
+def update_status(issue_id: int, body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.services.notify_email import send_status_update
     from app.services.notify_push import send_push
     from app.models.push import PushSubscription
@@ -126,18 +266,25 @@ def update_status(issue_id: int, body: dict, db: Session = Depends(get_db)):
     if not obj:
         raise HTTPException(status_code=404, detail="Issue not found")
 
-    obj.status = IssueStatus(new_status); db.commit(); db.refresh(obj)
-    from datetime import datetime, timezone
+    # Check if user is admin or super_admin
+    can_update = current_user.role in [UserRole.admin, UserRole.super_admin]
+    # Or if user is staff and assigned to this issue
+    if not can_update and current_user.role == UserRole.staff:
+        can_update = obj.assigned_to_id == current_user.id
+    
+    if not can_update:
+        raise HTTPException(status_code=403, detail="Only admins/staff or assigned staff can update status")
+
+    obj.status = IssueStatus(new_status)
     now = datetime.now(timezone.utc)
     if new_status == "in_progress":
         obj.in_progress_at = now
-        db.commit()
-        db.execute("insert into issue_activity(issue_id, kind, at) values (:i,'in_progress', now())", {"i": obj.id})
+        db.add(IssueActivity(issue_id=obj.id, kind=ActivityKind.in_progress, at=now))
     elif new_status == "resolved":
         obj.resolved_at = now
-        db.commit()
-        db.execute("insert into issue_activity(issue_id, kind, at) values (:i,'resolved', now())", {"i": obj.id})
+        db.add(IssueActivity(issue_id=obj.id, kind=ActivityKind.resolved, at=now))
     db.commit()
+    db.refresh(obj)
 
     # notify creator if known
     if obj.created_by_id:
@@ -155,33 +302,85 @@ def update_status(issue_id: int, body: dict, db: Session = Depends(get_db)):
                     )
                 except Exception: pass
 
-    return obj
+    photos = _get_issue_photos(db, obj.id)
+    issue_dict = {
+        "id": obj.id,
+        "title": obj.title,
+        "description": obj.description,
+        "category": obj.category,
+        "status": obj.status.value,  # Convert enum to string
+        "lat": obj.lat,
+        "lng": obj.lng,
+        "address": obj.address,
+        "created_at": obj.created_at,
+    }
+    out = IssueOut.model_validate(issue_dict)
+    out.photos = photos
+    return out
 
 @router.get("/{issue_id}")
-def get_issue(issue_id:int, db: Session = Depends(get_db), current=Depends(get_current_user)):
-    row = db.execute(text("""
-      select i.id, i.title, i.description, i.category, i.status, i.lat, i.lng, i.address, i.created_at,
-             u.name as creator_name, u.email as creator_email
-      from issues i left join users u on u.id = i.created_by_id
-      where i.id = :id
-    """), {"id": issue_id}).mappings().first()
-    if not row: raise HTTPException(status_code=404, detail="Not found")
-    return dict(row)
+def get_issue(issue_id:int, db: Session = Depends(get_db), current=Depends(get_optional_user)):
+    issue = db.query(Issue).filter(Issue.id == issue_id).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    # Fetch photos
+    photos = _get_issue_photos(db, issue_id)
+    
+    # Fetch creator info
+    creator = None
+    if issue.created_by_id:
+        creator_user = db.query(User).filter(User.id == issue.created_by_id).first()
+        if creator_user:
+            creator = {"id": creator_user.id, "name": creator_user.name, "email": creator_user.email}
+    
+    # Build response - convert enum to string for Pydantic validation
+    issue_dict = {
+        "id": issue.id,
+        "title": issue.title,
+        "description": issue.description,
+        "category": issue.category,
+        "status": issue.status.value,
+        "lat": issue.lat,
+        "lng": issue.lng,
+        "address": issue.address,
+        "created_at": issue.created_at,
+    }
+    result = IssueOut.model_validate(issue_dict)
+    result.photos = photos
+    result_dict = result.model_dump()
+    result_dict["creator"] = creator
+    result_dict["assigned_to_id"] = issue.assigned_to_id
+    result_dict["created_by_id"] = issue.created_by_id
+    result_dict["country"] = issue.country
+    result_dict["state_code"] = issue.state_code
+    return result_dict
 
 @router.get("/{issue_id}/comments")
 def list_comments(issue_id:int, db:Session=Depends(get_db)):
     rows = db.execute(text("""
-      select c.id, c.body, c.created_at, coalesce(u.name,u.email) as author
+      select c.id, c.body, c.created_at, coalesce(u.name, u.email, 'Anonymous') as author
       from issue_comments c left join users u on u.id=c.user_id
       where c.issue_id=:iid order by c.created_at desc
     """), {"iid": issue_id}).mappings().all()
-    return rows
+    return [{"id": r["id"], "body": r["body"], "created_at": r["created_at"].isoformat() if r["created_at"] else None, "author": r["author"]} for r in rows]
 
 @router.post("/{issue_id}/comments", dependencies=[Depends(require_verified_user)])
-def add_comment(issue_id:int, payload:dict, user=Depends(get_current_user), db:Session=Depends(get_db)):
+def add_comment(issue_id:int, payload:dict, user: User=Depends(get_current_user), db:Session=Depends(get_db)):
     body = (payload.get("body") or "").strip()
     if len(body) < 1: raise HTTPException(status_code=400, detail="Empty comment")
-    db.execute(text("insert into issue_comments(issue_id,user_id,body) values (:i,:u,:b)"),
-               {"i":issue_id,"u":user.id,"b":body})
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    db.execute(text("insert into issue_comments(issue_id,user_id,body,created_at) values (:i,:u,:b,:t)"),
+               {"i":issue_id,"u":user.id,"b":body,"t":now})
     db.commit()
+    # Fetch the created comment
+    row = db.execute(text("""
+      select c.id, c.body, c.created_at, coalesce(u.name, u.email, 'Anonymous') as author
+      from issue_comments c left join users u on u.id=c.user_id
+      where c.issue_id=:iid and c.user_id=:uid and c.body=:b
+      order by c.created_at desc limit 1
+    """), {"iid": issue_id, "uid": user.id, "b": body}).mappings().first()
+    if row:
+        return {"id": row["id"], "body": row["body"], "created_at": row["created_at"].isoformat() if row["created_at"] else None, "author": row["author"]}
     return {"ok": True}

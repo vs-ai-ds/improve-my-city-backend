@@ -4,16 +4,33 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func, outerjoin
 from typing import List
 from app.db.session import get_db
 from app.models.issue_type import IssueType
+from app.models.issue import Issue
 from app.core.security import require_role
 
 router = APIRouter(prefix="/admin/issue-types", tags=["issue-types"])
 
 @router.get("", response_model=List[dict])
 def list_types(db: Session = Depends(get_db)):
-    return [{"id": t.id, "name": t.name, "is_active": t.is_active} for t in db.query(IssueType).order_by(IssueType.name)]
+    results = (
+        db.query(
+            IssueType.id,
+            IssueType.name,
+            IssueType.is_active,
+            func.count(Issue.id).label("issue_count")
+        )
+        .outerjoin(Issue, Issue.category == IssueType.name)
+        .group_by(IssueType.id, IssueType.name, IssueType.is_active)
+        .order_by(IssueType.name)
+        .all()
+    )
+    return [
+        {"id": r[0], "name": r[1], "is_active": r[2], "issue_count": r[3]}
+        for r in results
+    ]
 
 
 @router.post("", dependencies=[Depends(require_role("admin","super_admin"))])
@@ -32,4 +49,17 @@ def update_type(type_id: int, payload: dict, db: Session = Depends(get_db)):
     if "name" in payload: t.name = payload["name"]
     if "is_active" in payload: t.is_active = bool(payload["is_active"])
     db.commit(); db.refresh(t)
+    return {"ok": True}
+
+@router.delete("/{type_id}", dependencies=[Depends(require_role("admin","super_admin"))])
+def delete_type(type_id: int, db: Session = Depends(get_db)):
+    from app.models.issue import Issue
+    t = db.query(IssueType).get(type_id)
+    if not t: raise HTTPException(status_code=404, detail="not found")
+    # Check if any issues use this type
+    issue_count = db.query(Issue).filter(Issue.category == t.name).count()
+    if issue_count > 0:
+        raise HTTPException(status_code=400, detail=f"Cannot delete: {issue_count} issue(s) use this type")
+    db.delete(t)
+    db.commit()
     return {"ok": True}

@@ -18,5 +18,6 @@ def ask(payload: dict, db: Session = Depends(get_db)):
         iid = int(m.group(1))
         i = db.query(Issue).get(iid)
         if not i: return {"answer": f"I can’t find issue #{iid}."}
-        return {"answer": f"Issue #{i.id} is {i.status.replace('_',' ')}."}
+        status_str = i.status.value if hasattr(i.status, 'value') else str(i.status)
+        return {"answer": f"Issue #{i.id} is {status_str.replace('_',' ')}."}
     return {"answer": "You can ask: 'What is the status of complaint #123?'"}

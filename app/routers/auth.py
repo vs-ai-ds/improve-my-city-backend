@@ -170,3 +170,14 @@ def verify_code(email: str, code: str, db: Session = Depends(get_db)):
     user.email_verify_expires_at = None
     db.commit()
     return {"ok": True}
+
+@router.get("/me")
+def me(user=Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "is_verified": user.is_verified,
+    }
+
