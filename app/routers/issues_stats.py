@@ -89,9 +89,11 @@ def top_contributors(limit: int = 10, db: Session = Depends(get_db)):
 
 @router.get("/recent-activity")
 def recent_activity(limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):
+    from app.models.user import User
     activities = (
-        db.query(IssueActivity, Issue)
+        db.query(IssueActivity, Issue, User)
         .join(Issue, Issue.id == IssueActivity.issue_id)
+        .outerjoin(User, User.id == Issue.created_by_id)
         .order_by(IssueActivity.at.desc())
         .limit(limit)
         .all()
@@ -102,9 +104,12 @@ def recent_activity(limit: int = Query(20, ge=1, le=100), db: Session = Depends(
             "kind": act.kind.value if hasattr(act.kind, 'value') else str(act.kind),
             "at": act.at.isoformat() if act.at else None,
             "title": issue.title or "",
-            "address": issue.address or ""
+            "description": issue.description or "",
+            "address": issue.address or "",
+            "resolved_at": issue.resolved_at.isoformat() if issue.resolved_at else None,
+            "created_by": (user.name if user and user.name else user.email) if user else "Anonymous"
         }
-        for act, issue in activities
+        for act, issue, user in activities
     ]
 
 @router.get("/avg-resolve-time")
