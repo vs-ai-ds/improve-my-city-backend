@@ -231,6 +231,18 @@ def list_issues(
     result = []
     for issue in issues:
         photos = _get_issue_photos(db, issue.id)
+        # Fetch creator info
+        creator = None
+        if issue.created_by_id:
+            creator_user = db.query(User).filter(User.id == issue.created_by_id).first()
+            if creator_user:
+                creator = {"name": creator_user.name, "email": creator_user.email}
+        # Fetch assigned user info
+        assigned_to = None
+        if issue.assigned_to_id:
+            assigned_user = db.query(User).filter(User.id == issue.assigned_to_id).first()
+            if assigned_user:
+                assigned_to = {"id": assigned_user.id, "name": assigned_user.name, "email": assigned_user.email, "role": assigned_user.role.value}
         # Convert enum to value for Pydantic validation
         issue_dict = {
             "id": issue.id,
@@ -242,10 +254,17 @@ def list_issues(
             "lng": issue.lng,
             "address": issue.address,
             "created_at": issue.created_at,
+            "updated_at": issue.updated_at,
+            "country": issue.country,
+            "state_code": issue.state_code,
+            "assigned_to_id": issue.assigned_to_id,
         }
         out = IssueOut.model_validate(issue_dict)
         out.photos = photos
-        result.append(out)
+        out_dict = out.model_dump()
+        out_dict["creator"] = creator
+        out_dict["assigned_to"] = assigned_to
+        result.append(out_dict)
     return {
         "items": result,
         "total": total_count,
@@ -355,6 +374,59 @@ def get_issue(issue_id:int, db: Session = Depends(get_db), current=Depends(get_o
     result_dict["country"] = issue.country
     result_dict["state_code"] = issue.state_code
     return result_dict
+
+@router.patch("/{issue_id}")
+def update_issue(issue_id: int, body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from datetime import datetime
+    
+    obj = db.query(Issue).filter(Issue.id == issue_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    
+    if "assigned_to_id" in body:
+        assigned_id = body.get("assigned_to_id")
+        if assigned_id is None:
+            obj.assigned_to_id = None
+        else:
+            user = db.query(User).filter(User.id == assigned_id).first()
+            if not user:
+                raise HTTPException(status_code=400, detail="User not found")
+            obj.assigned_to_id = assigned_id
+        obj.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(obj)
+    
+    photos = _get_issue_photos(db, obj.id)
+    issue_dict = {
+        "id": obj.id,
+        "title": obj.title,
+        "description": obj.description,
+        "category": obj.category,
+        "status": obj.status.value,
+        "lat": obj.lat,
+        "lng": obj.lng,
+        "address": obj.address,
+        "created_at": obj.created_at,
+        "updated_at": obj.updated_at,
+        "country": obj.country,
+        "state_code": obj.state_code,
+        "assigned_to_id": obj.assigned_to_id,
+    }
+    out = IssueOut.model_validate(issue_dict)
+    out.photos = photos
+    out_dict = out.model_dump()
+    
+    if obj.created_by_id:
+        creator_user = db.query(User).filter(User.id == obj.created_by_id).first()
+        if creator_user:
+            out_dict["creator"] = {"name": creator_user.name, "email": creator_user.email}
+    
+    if obj.assigned_to_id:
+        assigned_user = db.query(User).filter(User.id == obj.assigned_to_id).first()
+        if assigned_user:
+            out_dict["assigned_to"] = {"id": assigned_user.id, "name": assigned_user.name, "email": assigned_user.email, "role": assigned_user.role.value}
+    
+    return out_dict
 
 @router.get("/{issue_id}/comments")
 def list_comments(issue_id:int, db:Session=Depends(get_db)):

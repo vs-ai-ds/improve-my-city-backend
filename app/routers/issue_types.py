@@ -35,20 +35,53 @@ def list_types(db: Session = Depends(get_db)):
 
 @router.post("", dependencies=[Depends(require_role("admin","super_admin"))])
 def create_type(payload: dict, db: Session = Depends(get_db)):
-    name = payload.get("name")
-    if not name: raise HTTPException(status_code=400, detail="name required")
-    if db.query(IssueType).filter(IssueType.name == name).first():
-        raise HTTPException(status_code=400, detail="exists")
-    t = IssueType(name=name, is_active=True); db.add(t); db.commit(); db.refresh(t)
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    if len(name) < 3:
+        raise HTTPException(status_code=400, detail="name must be at least 3 characters")
+    if len(name) > 40:
+        raise HTTPException(status_code=400, detail="name must be at most 40 characters")
+    
+    existing = db.query(IssueType).filter(func.lower(IssueType.name) == func.lower(name)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Type already exists")
+    
+    t = IssueType(name=name, is_active=True)
+    db.add(t)
+    db.commit()
+    db.refresh(t)
     return {"id": t.id}
 
 @router.put("/{type_id}", dependencies=[Depends(require_role("admin","super_admin"))])
 def update_type(type_id: int, payload: dict, db: Session = Depends(get_db)):
     t = db.query(IssueType).get(type_id)
-    if not t: raise HTTPException(status_code=404, detail="not found")
-    if "name" in payload: t.name = payload["name"]
-    if "is_active" in payload: t.is_active = bool(payload["is_active"])
-    db.commit(); db.refresh(t)
+    if not t:
+        raise HTTPException(status_code=404, detail="not found")
+    
+    if "name" in payload:
+        name = (payload["name"] or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name cannot be empty")
+        if len(name) < 3:
+            raise HTTPException(status_code=400, detail="name must be at least 3 characters")
+        if len(name) > 40:
+            raise HTTPException(status_code=400, detail="name must be at most 40 characters")
+        
+        existing = db.query(IssueType).filter(
+            func.lower(IssueType.name) == func.lower(name),
+            IssueType.id != type_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Type already exists")
+        
+        t.name = name
+    
+    if "is_active" in payload:
+        t.is_active = bool(payload["is_active"])
+    
+    db.commit()
+    db.refresh(t)
     return {"ok": True}
 
 @router.delete("/{type_id}", dependencies=[Depends(require_role("admin","super_admin"))])

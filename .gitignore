@@ -4,3 +4,4 @@ __pycache__
 .env
 .alembic
 cleanup
+test_*.py

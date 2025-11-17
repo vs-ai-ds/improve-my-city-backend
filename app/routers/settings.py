@@ -22,6 +22,7 @@ def get_settings(db: Session = Depends(get_db)):
         "require_email_verification": s.require_email_verification,
         "admin_open_registration": s.admin_open_registration,
         "email_from": s.email_from,
+        "email_from_name": s.email_from_name,
         "features": s.features or {},
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
@@ -40,6 +41,8 @@ def update_settings(payload: dict, db: Session = Depends(get_db)):
         s.admin_open_registration = bool(payload["admin_open_registration"])
     if "email_from" in payload:
         s.email_from = payload["email_from"] or None
+    if "email_from_name" in payload:
+        s.email_from_name = payload["email_from_name"] or None
     if "features" in payload:
         s.features = payload["features"] or {}
     s.updated_at = datetime.utcnow()

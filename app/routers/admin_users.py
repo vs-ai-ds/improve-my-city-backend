@@ -8,20 +8,40 @@ from app.core.security import require_role, get_current_user
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
 
 @router.get("", dependencies=[Depends(require_role("admin","super_admin"))])
-def list_users(db: Session = Depends(get_db), q: str | None = None):
-  if q:
-    rows = db.execute(text("""
-      select id,email,name,mobile,is_active,is_verified,role,created_at
+def list_users(
+    db: Session = Depends(get_db),
+    q: str | None = None,
+    role: str | None = None,
+    is_active: bool | None = None,
+    is_verified: bool | None = None
+):
+    query = """
+      select id,email,name,mobile,is_active,is_verified,role,created_at,last_login
       from users
-      where email ilike :q or coalesce(name,'') ilike :q
-      order by created_at desc
-    """), {"q": f"%{q}%"}).mappings().all()
-  else:
-    rows = db.execute(text("""
-      select id,email,name,mobile,is_active,is_verified,role,created_at
-      from users order by created_at desc
-    """)).mappings().all()
-  return rows
+      where 1=1
+    """
+    params = {}
+    
+    if q:
+        query += " and (email ilike :q or coalesce(name,'') ilike :q)"
+        params["q"] = f"%{q}%"
+    
+    if role:
+        query += " and role = :role"
+        params["role"] = role
+    
+    if is_active is not None:
+        query += " and is_active = :is_active"
+        params["is_active"] = is_active
+    
+    if is_verified is not None:
+        query += " and is_verified = :is_verified"
+        params["is_verified"] = is_verified
+    
+    query += " order by created_at desc"
+    
+    rows = db.execute(text(query), params).mappings().all()
+    return [dict(row) for row in rows]
 
 @router.post("", dependencies=[Depends(require_role("super_admin"))])
 def create_user(payload: dict = Body(...), db: Session = Depends(get_db)):
