@@ -76,6 +76,33 @@ def by_state(range: str = Query("7d"), db: Session = Depends(get_db)):
     q = q.filter(Issue.state_code.isnot(None)).group_by(Issue.state_code).order_by(func.count(Issue.id).desc())
     return [{"state_code": r[0], "count": r[1]} for r in q.all()]
 
+@router.get("/by-state-status")
+def by_state_status(range: str = Query("7d"), db: Session = Depends(get_db)):
+    since = range_to_dt(range)
+    q = db.query(
+        Issue.state_code,
+        Issue.status,
+        func.count(Issue.id).label("count")
+    )
+    if since:
+        q = q.filter(Issue.created_at >= since)
+    q = q.filter(Issue.state_code.isnot(None)).group_by(Issue.state_code, Issue.status)
+    results = q.all()
+    
+    by_state: dict[str, dict[str, int]] = {}
+    for state, status, count in results:
+        state_name = state or "unknown"
+        if state_name not in by_state:
+            by_state[state_name] = {"pending": 0, "in_progress": 0, "resolved": 0}
+        status_str = status.value if hasattr(status, 'value') else str(status)
+        if status_str in by_state[state_name]:
+            by_state[state_name][status_str] = count
+    
+    return [
+        {"state_code": state, "pending": data["pending"], "in_progress": data["in_progress"], "resolved": data["resolved"]}
+        for state, data in sorted(by_state.items(), key=lambda x: sum(x[1].values()), reverse=True)
+    ]
+
 @router.get("/top-contributors")
 def top_contributors(limit: int = 10, db: Session = Depends(get_db)):
     q = (
@@ -90,16 +117,21 @@ def top_contributors(limit: int = 10, db: Session = Depends(get_db)):
 @router.get("/recent-activity")
 def recent_activity(limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):
     from app.models.user import User
+    from sqlalchemy.orm import aliased
+    Creator = aliased(User)
+    Assigned = aliased(User)
     activities = (
-        db.query(IssueActivity, Issue, User)
+        db.query(IssueActivity, Issue, Creator, Assigned)
         .join(Issue, Issue.id == IssueActivity.issue_id)
-        .outerjoin(User, User.id == Issue.created_by_id)
+        .outerjoin(Creator, Creator.id == Issue.created_by_id)
+        .outerjoin(Assigned, Assigned.id == Issue.assigned_to_id)
         .order_by(IssueActivity.at.desc())
         .limit(limit)
         .all()
     )
-    return [
-        {
+    result = []
+    for act, issue, creator, assigned in activities:
+        item = {
             "issue_id": act.issue_id,
             "kind": act.kind.value if hasattr(act.kind, 'value') else str(act.kind),
             "at": act.at.isoformat() if act.at else None,
@@ -107,10 +139,12 @@ def recent_activity(limit: int = Query(20, ge=1, le=100), db: Session = Depends(
             "description": issue.description or "",
             "address": issue.address or "",
             "resolved_at": issue.resolved_at.isoformat() if issue.resolved_at else None,
-            "created_by": (user.name if user and user.name else user.email) if user else "Anonymous"
+            "created_by": (creator.name if creator and creator.name else creator.email) if creator else "Anonymous",
+            "assigned_to_name": (assigned.name if assigned and assigned.name else assigned.email) if assigned else None,
+            "in_progress_at": issue.in_progress_at.isoformat() if issue.in_progress_at else None,
         }
-        for act, issue, user in activities
-    ]
+        result.append(item)
+    return result
 
 @router.get("/avg-resolve-time")
 def avg_resolve_time(db: Session = Depends(get_db)):
