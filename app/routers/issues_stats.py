@@ -138,6 +138,7 @@ def recent_activity(limit: int = Query(20, ge=1, le=100), db: Session = Depends(
             "title": issue.title or "",
             "description": issue.description or "",
             "address": issue.address or "",
+            "category": issue.category or "",
             "resolved_at": issue.resolved_at.isoformat() if issue.resolved_at else None,
             "created_by": (creator.name if creator and creator.name else creator.email) if creator else "Anonymous",
             "assigned_to_name": (assigned.name if assigned and assigned.name else assigned.email) if assigned else None,

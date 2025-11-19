@@ -49,7 +49,7 @@ def create_user(payload: dict = Body(...), db: Session = Depends(get_db)):
   name = (payload.get("name") or "").strip()
   role = (payload.get("role") or "citizen").strip()
   if not email or not name: raise HTTPException(400, "name_and_email_required")
-  if role not in ("citizen","staff","admin","super_admin"): raise HTTPException(400, "bad_role")
+  if role not in ("staff","admin"): raise HTTPException(400, "bad_role: only staff and admin can be created")
   exists = db.execute(text("select 1 from users where email=:e"), {"e": email}).first()
   if exists: raise HTTPException(400, "email_exists")
   # create inactive & unverified with random password

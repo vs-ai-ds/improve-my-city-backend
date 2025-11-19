@@ -2,12 +2,12 @@
 # Project: improve-my-city-backend
 # Auto-added for reference
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
-from app.core.config import cors_origins_list
+from app.core.config import cors_origins_list, settings
 from app.core.ratelimit import limiter
 from app.routers import auth, issues, settings as settings_router, issue_types, bot, issues_stats
 from app.routers import users, regions, push_subscriptions

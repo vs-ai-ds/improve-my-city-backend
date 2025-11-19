@@ -1,9 +1,10 @@
 #app\services\storage.py
-import os, requests, uuid
+import requests, uuid
+from app.core.config import settings
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE")
-BUCKET = os.getenv("SUPABASE_BUCKET", "issue-photos")
+SUPABASE_URL = settings.supabase_url
+SUPABASE_SERVICE_ROLE = settings.supabase_service_role
+BUCKET = settings.supabase_bucket
 
 def upload_image(data: bytes, content_type: str, path: str) -> str:
     """Uploads to Supabase Storage via REST; returns public URL (bucket must be public)."""

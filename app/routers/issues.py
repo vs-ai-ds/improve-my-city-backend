@@ -65,8 +65,13 @@ def create_issue(
     db.add(IssueActivity(issue_id=obj.id, kind=ActivityKind.created))
     db.commit()
 
+    # Check auto-assign setting
+    from app.models.app_settings import AppSettings
+    settings = db.query(AppSettings).first()
+    auto_assign_enabled = settings and settings.auto_assign_issues if settings else False
+    
     from sqlalchemy import func, case
-    if obj.state_code:
+    if auto_assign_enabled and obj.state_code:
         # First try: staff assigned to this state, with least open issues
         staff_with_counts = (
             db.query(
@@ -122,38 +127,8 @@ def create_issue(
                 ).first()
                 if super_admin:
                     obj.assigned_to_id = super_admin.id
-        db.commit()
-    else:
-        # No state_code - try admin with least open issues, then super_admin
-        admin_with_counts = (
-            db.query(
-                User.id,
-                func.count(Issue.id).label("open_count")
-            )
-            .outerjoin(
-                Issue,
-                (Issue.assigned_to_id == User.id) & 
-                (Issue.status.in_([IssueStatus.pending, IssueStatus.in_progress]))
-            )
-            .filter(
-                User.role == UserRole.admin,
-                User.is_active == True
-            )
-            .group_by(User.id)
-            .order_by(func.count(Issue.id).asc(), User.id.asc())
-            .limit(1)
-            .first()
-        )
-        if admin_with_counts:
-            obj.assigned_to_id = admin_with_counts[0]
-        else:
-            super_admin = db.query(User).filter(
-                User.role == UserRole.super_admin,
-                User.is_active == True
-            ).first()
-            if super_admin:
-                obj.assigned_to_id = super_admin.id
-        db.commit()
+        if auto_assign_enabled:
+            db.commit()
 
     # images
     if files:
@@ -279,6 +254,7 @@ def update_status(issue_id: int, body: dict, db: Session = Depends(get_db), curr
     from app.models.push import PushSubscription
 
     new_status = body.get("status")
+    comment_body = body.get("comment", "").strip()
     if new_status not in ["pending", "in_progress", "resolved"]:
         raise HTTPException(status_code=400, detail="Invalid status")
     obj = db.query(Issue).filter(Issue.id == issue_id).first()
@@ -294,6 +270,19 @@ def update_status(issue_id: int, body: dict, db: Session = Depends(get_db), curr
     if not can_update:
         raise HTTPException(status_code=403, detail="Only admins/staff or assigned staff can update status")
 
+    # Require assignment before moving to in_progress
+    if new_status == "in_progress" and not obj.assigned_to_id:
+        raise HTTPException(status_code=400, detail="Issue must be assigned before marking as in progress")
+    
+    # Require comment when changing status (except from pending if not assigned)
+    if new_status != "pending" and not comment_body:
+        raise HTTPException(status_code=400, detail="Comment is required when changing status")
+
+    # Require comment when resolving
+    if new_status == "resolved" and obj.status != IssueStatus.resolved:
+        if not comment_body:
+            raise HTTPException(status_code=400, detail="Comment is required when resolving an issue")
+
     obj.status = IssueStatus(new_status)
     now = datetime.now(timezone.utc)
     if new_status == "in_progress":
@@ -302,6 +291,12 @@ def update_status(issue_id: int, body: dict, db: Session = Depends(get_db), curr
     elif new_status == "resolved":
         obj.resolved_at = now
         db.add(IssueActivity(issue_id=obj.id, kind=ActivityKind.resolved, at=now))
+    
+    # Add comment if provided
+    if comment_body:
+        db.execute(text("insert into issue_comments(issue_id,user_id,body,created_at) values (:i,:u,:b,:t)"),
+                  {"i": issue_id, "u": current_user.id, "b": comment_body, "t": now})
+    
     db.commit()
     db.refresh(obj)
 
@@ -430,15 +425,47 @@ def update_issue(issue_id: int, body: dict, db: Session = Depends(get_db), curre
 
 @router.get("/{issue_id}/comments")
 def list_comments(issue_id:int, db:Session=Depends(get_db)):
+    issue = db.query(Issue).filter(Issue.id == issue_id).first()
+    creator_id = issue.created_by_id if issue else None
     rows = db.execute(text("""
-      select c.id, c.body, c.created_at, coalesce(u.name, u.email, 'Anonymous') as author
+      select c.id, c.body, c.created_at, c.user_id, 
+             coalesce(u.name, u.email, 'Anonymous') as author,
+             u.role as user_role
       from issue_comments c left join users u on u.id=c.user_id
       where c.issue_id=:iid order by c.created_at desc
     """), {"iid": issue_id}).mappings().all()
-    return [{"id": r["id"], "body": r["body"], "created_at": r["created_at"].isoformat() if r["created_at"] else None, "author": r["author"]} for r in rows]
+    result = []
+    for r in rows:
+        user_role = r["user_role"]
+        if user_role and hasattr(user_role, 'value'):
+            user_role_str = user_role.value
+        elif user_role:
+            user_role_str = str(user_role)
+        else:
+            user_role_str = None
+        comment = {
+            "id": r["id"], 
+            "body": r["body"], 
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None, 
+            "author": r["author"],
+            "user_role": user_role_str,
+            "is_creator": r["user_id"] == creator_id if creator_id and r["user_id"] else False
+        }
+        result.append(comment)
+    return result
 
-@router.post("/{issue_id}/comments", dependencies=[Depends(require_verified_user)])
+@router.post("/{issue_id}/comments")
 def add_comment(issue_id:int, payload:dict, user: User=Depends(get_current_user), db:Session=Depends(get_db)):
+    if not user:
+        raise HTTPException(status_code=401, detail="You must be logged in to post comments")
+    
+    issue = db.query(Issue).filter(Issue.id == issue_id).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    
+    if issue.status == IssueStatus.resolved:
+        raise HTTPException(status_code=400, detail="Cannot comment on resolved issues")
+    
     body = (payload.get("body") or "").strip()
     if len(body) < 1: raise HTTPException(status_code=400, detail="Empty comment")
     from datetime import datetime, timezone
@@ -447,12 +474,22 @@ def add_comment(issue_id:int, payload:dict, user: User=Depends(get_current_user)
                {"i":issue_id,"u":user.id,"b":body,"t":now})
     db.commit()
     # Fetch the created comment
+    creator_id = issue.created_by_id
     row = db.execute(text("""
-      select c.id, c.body, c.created_at, coalesce(u.name, u.email, 'Anonymous') as author
+      select c.id, c.body, c.created_at, c.user_id,
+             coalesce(u.name, u.email, 'Anonymous') as author,
+             u.role as user_role
       from issue_comments c left join users u on u.id=c.user_id
       where c.issue_id=:iid and c.user_id=:uid and c.body=:b
       order by c.created_at desc limit 1
     """), {"iid": issue_id, "uid": user.id, "b": body}).mappings().first()
     if row:
-        return {"id": row["id"], "body": row["body"], "created_at": row["created_at"].isoformat() if row["created_at"] else None, "author": row["author"]}
+        return {
+            "id": row["id"], 
+            "body": row["body"], 
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None, 
+            "author": row["author"],
+            "user_role": row["user_role"].value if row["user_role"] else None,
+            "is_creator": row["user_id"] == creator_id if creator_id and row["user_id"] else False
+        }
     return {"ok": True}

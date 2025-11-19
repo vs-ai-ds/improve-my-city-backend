@@ -1,10 +1,11 @@
 #app\services\notify_push.py
-import os, json
+import json
 from pywebpush import webpush, WebPushException
+from app.core.config import settings
 
-VAPID_PRIVATE = os.getenv("VAPID_PRIVATE_KEY")
-VAPID_PUBLIC = os.getenv("VAPID_PUBLIC_KEY")
-VAPID_CLAIMS = {"sub": os.getenv("VAPID_SUB","mailto:noreply@example.com")}
+VAPID_PRIVATE = settings.vapid_private_key
+VAPID_PUBLIC = settings.vapid_public_key
+VAPID_CLAIMS = {"sub": settings.vapid_sub}
 
 def send_push(subscription: dict, payload: dict):
     if not VAPID_PRIVATE or not VAPID_PUBLIC: return
