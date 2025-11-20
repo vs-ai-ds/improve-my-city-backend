@@ -1,16 +1,22 @@
 # app/services/notify_email.py
 
-import resend
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from app.core.config import settings
-
-resend.api_key = settings.resend_api_key
 
 FROM_NAME = settings.email_from_name
 FROM_ADDR = settings.email_from_address
 
 EMAIL_REDIRECT_TO = settings.email_redirect_to
 EMAIL_DOMAIN_VERIFIED = settings.email_domain_verified
+
+SMTP_HOST = settings.smtp_host
+SMTP_PORT = settings.smtp_port
+SMTP_USERNAME = settings.smtp_username
+SMTP_PASSWORD = settings.smtp_password
+SMTP_USE_SSL = settings.smtp_use_ssl
 
 # ===================================================================
 # BASE TEMPLATE - official city look, compact spacing
@@ -81,6 +87,37 @@ def _get_template_base():
           </div>
         """
     return TPL_BASE.replace("{CONTACT_SECTION}", contact_section).replace("{YEAR}", "2025")
+
+
+# ===================================================================
+# Helper: send email via SMTP
+# ===================================================================
+
+def _send_email_via_smtp(to_email: str, subject: str, html_content: str):
+    """Send an email using SMTP with proper SSL/TLS handling."""
+    if not SMTP_HOST or not SMTP_USERNAME or not SMTP_PASSWORD or not FROM_ADDR:
+        return
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"{FROM_NAME} <{FROM_ADDR}>" if FROM_NAME else FROM_ADDR
+        msg["To"] = to_email
+        
+        html_part = MIMEText(html_content, "html")
+        msg.attach(html_part)
+
+        if SMTP_USE_SSL:
+            server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15)
+        else:
+            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)
+            server.starttls()
+
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+    except Exception as e:
+        print(f"Failed to send email via SMTP: {e}")
 
 
 # ===================================================================
@@ -168,9 +205,6 @@ def _format_link_section(link: str, link_text: str = "Open link") -> str:
 # ===================================================================
 
 def send_email_verification(to_email: str, token: str, code: Optional[str] = None):
-    if not resend.api_key:
-        return
-
     actual_recipient, redirect_note = _get_recipient_and_note(to_email)
     link = _build_url(f"verify-email?token={token}")
 
@@ -199,13 +233,7 @@ def send_email_verification(to_email: str, token: str, code: Optional[str] = Non
         """
 
     html = _get_template_base() % html_content
-
-    resend.Emails.send({
-        "from": f"{FROM_NAME} <{FROM_ADDR}>" if FROM_NAME and FROM_ADDR else (FROM_ADDR or "noreply@improve-my-city.com"),
-        "to": [actual_recipient],
-        "subject": "Verify your email address",
-        "html": html,
-    })
+    _send_email_via_smtp(actual_recipient, "Verify your email address", html)
 
 
 # ===================================================================
@@ -213,9 +241,6 @@ def send_email_verification(to_email: str, token: str, code: Optional[str] = Non
 # ===================================================================
 
 def send_reset_password(to_email: str, token: str):
-    if not resend.api_key:
-        return
-
     actual_recipient, redirect_note = _get_recipient_and_note(to_email)
     link = _build_url(f"reset-password?token={token}")
 
@@ -233,13 +258,7 @@ def send_reset_password(to_email: str, token: str):
     """
 
     html = _get_template_base() % html_content
-
-    resend.Emails.send({
-        "from": f"{FROM_NAME} <{FROM_ADDR}>" if FROM_NAME and FROM_ADDR else (FROM_ADDR or "noreply@improve-my-city.com"),
-        "to": [actual_recipient],
-        "subject": "Reset your password",
-        "html": html,
-    })
+    _send_email_via_smtp(actual_recipient, "Reset your password", html)
 
 
 # ===================================================================
@@ -247,9 +266,6 @@ def send_reset_password(to_email: str, token: str):
 # ===================================================================
 
 def send_status_update(to_email: str, issue_id: int, status: str):
-    if not resend.api_key:
-        return
-
     actual_recipient, redirect_note = _get_recipient_and_note(to_email)
 
     readable_status = status.replace("_", " ").title()
@@ -273,13 +289,7 @@ def send_status_update(to_email: str, issue_id: int, status: str):
     """
 
     html = _get_template_base() % html_content
-
-    resend.Emails.send({
-        "from": f"{FROM_NAME} <{FROM_ADDR}>" if FROM_NAME and FROM_ADDR else (FROM_ADDR or "noreply@improve-my-city.com"),
-        "to": [actual_recipient],
-        "subject": f"Issue #{issue_id} status update",
-        "html": html,
-    })
+    _send_email_via_smtp(actual_recipient, f"Issue #{issue_id} status update", html)
 
 
 # ===================================================================
@@ -288,9 +298,6 @@ def send_status_update(to_email: str, issue_id: int, status: str):
 
 def send_report_confirmation(to_email: str, issue_id: int, title: str):
     """Send confirmation email when a report is submitted."""
-    if not resend.api_key:
-        return
-
     actual_recipient, redirect_note = _get_recipient_and_note(to_email)
     link = _build_url(f"issues/{issue_id}")
 
@@ -308,10 +315,4 @@ def send_report_confirmation(to_email: str, issue_id: int, title: str):
     """
 
     html = _get_template_base() % html_content
-
-    resend.Emails.send({
-        "from": f"{FROM_NAME} <{FROM_ADDR}>" if FROM_NAME and FROM_ADDR else (FROM_ADDR or "noreply@improve-my-city.com"),
-        "to": [actual_recipient],
-        "subject": f"Report submitted – Ticket #{issue_id}",
-        "html": html,
-    })
+    _send_email_via_smtp(actual_recipient, f"Report submitted – Ticket #{issue_id}", html)
