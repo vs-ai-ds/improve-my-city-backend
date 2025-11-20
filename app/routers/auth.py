@@ -64,7 +64,11 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
 @router.post("/login", response_model=TokenPair)
 def login(body: LoginIn, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == body.email).first()
-    if not user or not verify_password(body.password, user.hashed_password):
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not user.hashed_password:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Please contact support.")

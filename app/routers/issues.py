@@ -58,6 +58,38 @@ def create_issue(
     if obj.lat is not None and obj.lng is not None:
         if not (6.5 <= obj.lat <= 37.6 and 68.1 <= obj.lng <= 97.4):
             raise HTTPException(status_code=400, detail="Only India is supported")
+    
+    # Duplicate detection: same address + same type within 2 hours
+    if obj.lat and obj.lng and category:
+        from datetime import timedelta
+        two_hours_ago = datetime.utcnow() - timedelta(hours=2)
+        similar_issues = db.query(Issue).filter(
+            Issue.category == category,
+            Issue.created_at >= two_hours_ago,
+            Issue.lat.isnot(None),
+            Issue.lng.isnot(None)
+        ).all()
+        
+        from math import radians, cos, sin, asin, sqrt
+        def haversine(lat1, lon1, lat2, lon2):
+            R = 6371000
+            lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+            c = 2 * asin(sqrt(a))
+            return R * c
+        
+        for existing in similar_issues:
+            if existing.lat and existing.lng:
+                distance = haversine(obj.lat, obj.lng, existing.lat, existing.lng)
+                if distance <= 50:  # Within 50 meters
+                    return {
+                        "duplicate": True,
+                        "existing_issue_id": existing.id,
+                        "message": f"A similar issue (#{existing.id}) was reported recently at this location. Would you like to view it instead?"
+                    }
+    
     if auth:
         obj.created_by_id = auth.id
 
@@ -183,8 +215,12 @@ def list_issues(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     mine_only: int = Query(default=0, ge=0, le=1),
+    date_range: Optional[str] = Query(default=None),
+    search: Optional[str] = Query(default=None),
     auth = Depends(get_optional_user), 
 ):
+    from datetime import datetime, timedelta
+    
     q = db.query(Issue)
     if status:
         q = q.filter(Issue.status == status)
@@ -192,6 +228,23 @@ def list_issues(
         q = q.filter(Issue.category == category)
     if state_code:
         q = q.filter(Issue.state_code == state_code)
+    if date_range:
+        now = datetime.utcnow()
+        if date_range == "7d":
+            since = now - timedelta(days=7)
+            q = q.filter(Issue.created_at >= since)
+        elif date_range == "30d":
+            since = now - timedelta(days=30)
+            q = q.filter(Issue.created_at >= since)
+        elif date_range == "90d":
+            since = now - timedelta(days=90)
+            q = q.filter(Issue.created_at >= since)
+    if search:
+        search_term = f"%{search}%"
+        q = q.filter(
+            (Issue.title.ilike(search_term)) | 
+            (Issue.description.ilike(search_term))
+        )
     if bbox:
         try:
             min_lng, min_lat, max_lng, max_lat = [float(x) for x in bbox.split(",")]
@@ -493,3 +546,162 @@ def add_comment(issue_id:int, payload:dict, user: User=Depends(get_current_user)
             "is_creator": row["user_id"] == creator_id if creator_id and row["user_id"] else False
         }
     return {"ok": True}
+
+@router.get("/{issue_id}/related")
+def get_related_issues(issue_id: int, db: Session = Depends(get_db)):
+    issue = db.query(Issue).filter(Issue.id == issue_id).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    
+    if not issue.lat or not issue.lng:
+        return []
+    
+    from math import radians, cos, sin, asin, sqrt
+    
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371000
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * asin(sqrt(a))
+        return R * c
+    
+    all_issues = db.query(Issue).filter(Issue.id != issue_id).all()
+    nearby = []
+    for other in all_issues:
+        if other.lat and other.lng:
+            distance = haversine(issue.lat, issue.lng, other.lat, other.lng)
+            if distance <= 50:
+                photos = _get_issue_photos(db, other.id)
+                nearby.append({
+                    "id": other.id,
+                    "title": other.title,
+                    "status": other.status.value,
+                    "category": other.category,
+                    "distance_m": round(distance)
+                })
+    
+    nearby.sort(key=lambda x: x["distance_m"])
+    return nearby[:10]
+
+@router.get("/{issue_id}/activity")
+def get_issue_activity(issue_id: int, db: Session = Depends(get_db)):
+    issue = db.query(Issue).filter(Issue.id == issue_id).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    
+    activities = []
+    
+    if issue.created_at:
+        creator = None
+        if issue.created_by_id:
+            creator_user = db.query(User).filter(User.id == issue.created_by_id).first()
+            creator = creator_user.name if creator_user and creator_user.name else (creator_user.email if creator_user else "Anonymous")
+        activities.append({
+            "kind": "created",
+            "at": issue.created_at.isoformat(),
+            "user": creator,
+            "comment": None
+        })
+    
+    if issue.assigned_to_id:
+        assigned_user = db.query(User).filter(User.id == issue.assigned_to_id).first()
+        assigned_name = assigned_user.name if assigned_user and assigned_user.name else (assigned_user.email if assigned_user else "Unknown")
+        activities.append({
+            "kind": "assigned",
+            "at": issue.updated_at.isoformat() if issue.updated_at else issue.created_at.isoformat(),
+            "user": assigned_name,
+            "comment": None
+        })
+    
+    activity_records = db.query(IssueActivity).filter(IssueActivity.issue_id == issue_id).order_by(IssueActivity.at).all()
+    for act in activity_records:
+        activities.append({
+            "kind": act.kind.value if hasattr(act.kind, 'value') else str(act.kind),
+            "at": act.at.isoformat() if act.at else None,
+            "user": None,
+            "comment": None
+        })
+    
+    comments = db.execute(text("""
+      select c.id, c.body, c.created_at, c.user_id, 
+             coalesce(u.name, u.email, 'Anonymous') as author
+      from issue_comments c left join users u on u.id=c.user_id
+      where c.issue_id=:iid order by c.created_at
+    """), {"iid": issue_id}).mappings().all()
+    
+    for comment in comments:
+        activities.append({
+            "kind": "comment",
+            "at": comment["created_at"].isoformat() if comment["created_at"] else None,
+            "user": comment["author"],
+            "comment": comment["body"]
+        })
+    
+    activities.sort(key=lambda x: x["at"] if x["at"] else "")
+    return activities
+
+@router.post("/bulk")
+def bulk_operations(
+    body: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role not in [UserRole.admin, UserRole.super_admin]:
+        raise HTTPException(status_code=403, detail="Only admins can perform bulk operations")
+    
+    issue_ids = body.get("issue_ids", [])
+    operation = body.get("operation")
+    
+    if not issue_ids or not isinstance(issue_ids, list):
+        raise HTTPException(status_code=400, detail="issue_ids must be a non-empty list")
+    
+    issues = db.query(Issue).filter(Issue.id.in_(issue_ids)).all()
+    if len(issues) != len(issue_ids):
+        raise HTTPException(status_code=400, detail="Some issue IDs not found")
+    
+    updated_count = 0
+    
+    if operation == "assign":
+        user_id = body.get("user_id")
+        if user_id is not None:
+            if user_id:
+                user = db.query(User).filter(User.id == user_id).first()
+                if not user:
+                    raise HTTPException(status_code=400, detail="User not found")
+            for issue in issues:
+                issue.assigned_to_id = user_id
+                issue.updated_at = datetime.now(timezone.utc)
+                if user_id:
+                    try:
+                        db.add(IssueActivity(issue_id=issue.id, kind=ActivityKind.assigned))
+                    except:
+                        pass
+            updated_count = len(issues)
+    
+    elif operation == "status":
+        new_status = body.get("status")
+        if new_status not in ["pending", "in_progress", "resolved"]:
+            raise HTTPException(status_code=400, detail="Invalid status")
+        for issue in issues:
+            issue.status = IssueStatus(new_status)
+            issue.updated_at = datetime.now(timezone.utc)
+            if new_status == "in_progress":
+                issue.in_progress_at = datetime.now(timezone.utc)
+                db.add(IssueActivity(issue_id=issue.id, kind=ActivityKind.in_progress))
+            elif new_status == "resolved":
+                issue.resolved_at = datetime.now(timezone.utc)
+                db.add(IssueActivity(issue_id=issue.id, kind=ActivityKind.resolved))
+        updated_count = len(issues)
+    
+    elif operation == "delete":
+        for issue in issues:
+            db.delete(issue)
+        updated_count = len(issues)
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid operation")
+    
+    db.commit()
+    return {"ok": True, "updated_count": updated_count}

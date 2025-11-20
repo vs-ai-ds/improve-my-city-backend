@@ -61,7 +61,7 @@ def create_user(payload: dict = Body(...), db: Session = Depends(get_db)):
   return {"ok": True}
 
 @router.put("/{user_id}", dependencies=[Depends(require_role("admin","super_admin"))])
-def update_user(user_id:int, payload:dict=Body(...), db:Session=Depends(get_db), me=Depends(get_current_user)):
+def update_admin_user(user_id:int, payload:dict=Body(...), db:Session=Depends(get_db), me=Depends(get_current_user)):
   role = payload.get("role"); is_active = payload.get("is_active")
   if role and role not in ("citizen","staff","admin","super_admin"):
     raise HTTPException(400,"bad_role")
@@ -76,7 +76,7 @@ def update_user(user_id:int, payload:dict=Body(...), db:Session=Depends(get_db),
   db.commit(); return {"ok": True}
 
 @router.delete("/{user_id}", dependencies=[Depends(require_role("super_admin"))])
-def delete_user(user_id:int, db:Session=Depends(get_db), me=Depends(get_current_user)):
+def delete_admin_user(user_id:int, db:Session=Depends(get_db), me=Depends(get_current_user)):
   if me.id == user_id:
     raise HTTPException(400,"cannot_delete_self")
   r = db.execute(text("select role from users where id=:id"), {"id": user_id}).first()
@@ -84,3 +84,80 @@ def delete_user(user_id:int, db:Session=Depends(get_db), me=Depends(get_current_
   if r[0] == "super_admin": raise HTTPException(400,"cannot_delete_super_admin")
   db.execute(text("delete from users where id=:id"), {"id":user_id})
   db.commit(); return {"ok": True}
+
+@router.post("/{user_id}/reset-password", dependencies=[Depends(require_role("admin","super_admin"))])
+def trigger_password_reset(user_id: int, db: Session = Depends(get_db)):
+    from app.models.user import User
+    from app.services.notify_email import send_reset_password
+    from app.core.security import make_email_token
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    try:
+        token = make_email_token(user.email, "reset")
+        send_reset_password(user.email, token)
+        return {"ok": True, "message": "Password reset email sent"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send reset email: {str(e)}")
+
+@router.get("/{user_id}/stats")
+def get_user_stats(user_id: int, db: Session = Depends(get_db)):
+    from app.models.issue import Issue
+    from app.models.issue_activity import IssueActivity
+    from sqlalchemy import func
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    issues_handled = db.query(Issue).filter(Issue.assigned_to_id == user_id).count()
+    issues_created = db.query(Issue).filter(Issue.created_by_id == user_id).count()
+    issues_resolved = db.query(Issue).filter(
+        Issue.assigned_to_id == user_id,
+        Issue.status == "resolved"
+    ).count()
+    
+    recent_activity = db.query(IssueActivity).filter(
+        IssueActivity.issue_id.in_(
+            db.query(Issue.id).filter(Issue.assigned_to_id == user_id)
+        )
+    ).order_by(IssueActivity.at.desc()).limit(10).all()
+    
+    return {
+        "issues_handled": issues_handled,
+        "issues_created": issues_created,
+        "issues_resolved": issues_resolved,
+        "recent_activity": [
+            {
+                "kind": act.kind.value if hasattr(act.kind, 'value') else str(act.kind),
+                "at": act.at.isoformat() if act.at else None,
+                "issue_id": act.issue_id
+            }
+            for act in recent_activity
+        ]
+    }
+
+@router.post("/bulk", dependencies=[Depends(require_role("admin","super_admin"))])
+def bulk_user_operations(payload: dict = Body(...), db: Session = Depends(get_db)):
+    user_ids = payload.get("user_ids", [])
+    operation = payload.get("operation")
+    
+    if not user_ids or not isinstance(user_ids, list):
+        raise HTTPException(400, "user_ids must be a non-empty list")
+    
+    if operation == "activate":
+        db.execute(text("update users set is_active=true where id=any(:ids)"), {"ids": user_ids})
+        db.commit()
+        return {"ok": True, "updated_count": len(user_ids)}
+    elif operation == "deactivate":
+        db.execute(text("update users set is_active=false where id=any(:ids) and role != 'super_admin'"), {"ids": user_ids})
+        db.commit()
+        return {"ok": True, "updated_count": len(user_ids)}
+    elif operation == "delete":
+        db.execute(text("delete from users where id=any(:ids) and role = 'citizen'"), {"ids": user_ids})
+        db.commit()
+        return {"ok": True, "updated_count": len(user_ids)}
+    else:
+        raise HTTPException(400, "Invalid operation")

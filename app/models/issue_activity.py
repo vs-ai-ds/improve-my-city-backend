@@ -7,6 +7,7 @@ from app.db.base import Base
 
 class ActivityKind(PyEnum):
     created = "created"
+    assigned = "assigned"
     in_progress = "in_progress"
     resolved = "resolved"
 

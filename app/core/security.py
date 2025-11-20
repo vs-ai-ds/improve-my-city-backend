@@ -18,8 +18,13 @@ bearer = HTTPBearer(auto_error=False)
 def hash_password(raw: str) -> str:
     return bcrypt_sha256.hash(raw)
 
-def verify_password(raw: str, hashed: str) -> bool:
-    return bcrypt_sha256.verify(raw, hashed)
+def verify_password(raw: str, hashed: str | None) -> bool:
+    if not hashed:
+        return False
+    try:
+        return bcrypt_sha256.verify(raw, hashed)
+    except Exception:
+        return False
 
 def _make_token(sub: str, role: str, ttl: int) -> str:
     now = int(time.time())
