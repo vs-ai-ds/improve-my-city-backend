@@ -177,33 +177,6 @@ https://imcb.varunanalytics.com/
 
 All environment variables are documented in `.env.example`. Key variables include:
 
-### Required
-- `DATABASE_URL` - PostgreSQL connection string
-- `JWT_SECRET` - Secret key for JWT token signing
-
-### Email Configuration (SMTP)
-- `SMTP_HOST` - SMTP server hostname
-- `SMTP_PORT` - SMTP port (587 for TLS, 465 for SSL)
-- `SMTP_USERNAME` - SMTP authentication username
-- `SMTP_PASSWORD` - SMTP authentication password
-- `SMTP_USE_SSL` - Use SSL (true/false)
-- `EMAIL_FROM_NAME` - Sender display name
-- `EMAIL_FROM_ADDRESS` - Sender email address
-
-### Push Notifications (VAPID)
-- `VAPID_PUBLIC_KEY` - VAPID public key
-- `VAPID_PRIVATE_KEY` - VAPID private key
-- `VAPID_SUB` - VAPID subject (mailto: format)
-
-### Storage (Supabase)
-- `SUPABASE_URL` - Supabase project URL
-
-### Application
-- `FRONTEND_BASE_URL` - Frontend application URL
-- `BACKEND_CORS_ORIGINS` - Comma-separated allowed origins
-
-See `.env.example` for complete list and descriptions.
-
 ---
 
 ## 📊 Database Migrations
@@ -227,13 +200,6 @@ alembic history
 
 # Check current revision
 alembic current
-```
-
-### Recent Migrations
-
-- `add_issue_type_fields` - Adds description, color, display_order to issue_types
-- `add_settings_fields` - Adds SLA, branding, and notification settings
-- `add_email_from_name_to_app_settings` - Adds email sender name field
 
 ---
 
@@ -364,16 +330,6 @@ curl http://localhost:8000/issues \
 
 The backend supports SMTP for email delivery. Configure in `.env`:
 
-```env
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USERNAME=your-email@gmail.com
-SMTP_PASSWORD=your-app-password
-SMTP_USE_SSL=false
-EMAIL_FROM_NAME=Improve My City
-EMAIL_FROM_ADDRESS=noreply@yourdomain.com
-```
-
 **Email Types:**
 - Email verification
 - Password reset
@@ -387,7 +343,7 @@ Web Push Notifications using VAPID protocol:
 
 1. **Generate VAPID Keys**
    ```bash
-   npm install -g web-push
+   pnpm install -g web-push
    web-push generate-vapid-keys
    ```
 
@@ -466,10 +422,69 @@ Image storage for issue photos:
 - **Protection**: Prevent deletion of types with existing issues
 
 ### Settings Management
-- **SLA Configuration**: Default SLA hours and reminder settings
-- **Branding**: City logo, support email, website URL
-- **Notifications**: Email and push notification toggles
-- **Feature Flags**: Enable/disable features
+
+**Access Control:**
+- Only **Super Admin** can modify settings
+- **Admin** can view settings but cannot modify them
+- Settings are managed via `/admin/settings` endpoint
+
+**All Settings Options:**
+
+1. **Anonymous Reporting** (`allow_anonymous_reporting`)
+   - **Type**: Boolean
+   - **Default**: `false`
+   - **Description**: Allows users to report issues without logging in
+   - **Enforcement**: When disabled, users must login to report issues
+
+2. **Email Verification** (`require_email_verification`)
+   - **Type**: Boolean
+   - **Default**: `true`
+   - **Description**: Requires users to verify their email before full access
+   - **Enforcement**: Unverified users have limited functionality
+
+3. **Admin Open Registration** (`admin_open_registration`)
+   - **Type**: Boolean
+   - **Default**: `false`
+   - **Description**: Allows public registration of admin accounts
+   - **Enforcement**: When enabled, anyone can register as admin (use with caution)
+   - **Request Process**: Contact Super Admin to enable this setting
+
+4. **Auto Assign Issues** (`auto_assign_issues`)
+   - **Type**: Boolean
+   - **Default**: `false`
+   - **Description**: Automatically assigns new issues to staff based on region and workload
+   - **Enforcement**: When enabled, issues are auto-assigned on creation
+
+5. **Email Settings**:
+   - **Email From** (`email_from`): Sender email address for all system emails
+   - **Email From Name** (`email_from_name`): Display name for email sender
+   - **Usage**: Used in all email notifications (verification, password reset, status updates, comments, assignments)
+
+6. **SLA Settings**:
+   - **SLA Hours** (`sla_hours`): Default SLA time in hours (default: 48)
+   - **SLA Reminder Hours** (`sla_reminder_hours`): Hours before SLA breach to send reminder
+   - **Enforcement**: Used for tracking and reporting SLA compliance
+
+8. **Notification Settings**:
+   - **Auto Email on Status Change** (`auto_email_on_status_change`)
+     - **Type**: Boolean
+     - **Default**: `true`
+     - **Description**: Sends email notifications when issue status changes
+     - **Enforcement**: When enabled, emails are sent to:
+       - Issue creator (on status change)
+       - Assigned staff (on assignment and status change)
+       - All admins (on comment posting)
+   - **Push Notifications Enabled** (`push_notifications_enabled`)
+     - **Type**: Boolean
+     - **Default**: `true`
+     - **Description**: Enables web push notifications
+     - **Enforcement**: When enabled, push notifications are sent for status changes
+
+**Settings Enforcement:**
+- All boolean settings are enforced in the application logic
+- Email settings are used in all email sending functions
+- SLA settings are used in issue tracking and reporting
+- Notification settings control whether emails/push notifications are sent
 
 ---
 
@@ -558,24 +573,6 @@ improve-my-city-backend/
 
 ---
 
-## 🧪 Testing
-
-### Manual Testing Checklist
-
-- [ ] Authentication (register, login, verify, reset)
-- [ ] Issue creation with photos
-- [ ] Issue status updates
-- [ ] Comments creation and retrieval
-- [ ] Email notifications
-- [ ] Push notifications
-- [ ] Admin user management
-- [ ] Bulk operations
-- [ ] Analytics endpoints
-- [ ] Rate limiting
-- [ ] Duplicate detection
-
----
-
 ## 📚 API Documentation
 
 ### Interactive Documentation
@@ -635,17 +632,6 @@ Authorization: Bearer YOUR_JWT_TOKEN
 - Verify VAPID keys are correct
 - Check browser console for errors
 - Ensure HTTPS in production (required for push)
-
----
-
-## 📝 Code Style
-
-- Follow **PEP 8** Python style guide
-- Use **Black** for code formatting
-- Use **Ruff** for linting
-- Type hints for all functions
-- Docstrings for public functions
-- No `[AI]` comments or special markers
 
 ---
 

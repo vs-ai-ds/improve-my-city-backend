@@ -68,7 +68,7 @@ def create_type(payload: dict, db: Session = Depends(get_db)):
 
 @router.put("/{type_id}", dependencies=[Depends(require_role("admin","super_admin"))])
 def update_type(type_id: int, payload: dict, db: Session = Depends(get_db)):
-    t = db.query(IssueType).get(type_id)
+    t = db.query(IssueType).filter(IssueType.id == type_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="not found")
     
@@ -116,7 +116,7 @@ def reorder_types(payload: dict, db: Session = Depends(get_db)):
         try:
             type_id = int(type_id_str)
             display_order_int = int(display_order)
-            t = db.query(IssueType).get(type_id)
+            t = db.query(IssueType).filter(IssueType.id == type_id).first()
             if t:
                 t.display_order = display_order_int
         except (ValueError, TypeError):

@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from app.core.config import cors_origins_list, settings
 from app.core.ratelimit import limiter
 from app.routers import auth, issues, settings as settings_router, issue_types, bot, issues_stats
-from app.routers import users, regions, push_subscriptions
+from app.routers import regions, push_subscriptions
 from app.routers import public_issue_types
 from app.routers import admin_users
 
@@ -36,7 +36,6 @@ app.include_router(settings_router.router)
 app.include_router(issue_types.router)
 app.include_router(bot.router)
 app.include_router(issues_stats.router)
-app.include_router(users.router)
 app.include_router(regions.router)
 app.include_router(push_subscriptions.router)
 app.include_router(public_issue_types.router)

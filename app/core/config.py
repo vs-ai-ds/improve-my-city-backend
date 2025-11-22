@@ -24,11 +24,13 @@ class Settings(BaseSettings):
     - VAPID_SUB=mailto:noreply@example.com
     
     Optional (no defaults - will be None if not set):
+    - EMAIL_PROVIDER=smtp (or resend) - default is smtp
     - SMTP_HOST=smtp.gmail.com (or your SMTP server)
     - SMTP_PORT=587 (or 465 for SSL)
     - SMTP_USERNAME=your-email@example.com
     - SMTP_PASSWORD=your-app-password
     - SMTP_USE_SSL=true (or false for SSL)
+    - RESEND_API_KEY=re_xxxxx (Resend API key if using Resend)
     - EMAIL_FROM_NAME=Your App Name
     - EMAIL_FROM_ADDRESS=noreply@yourdomain.com
     - EMAIL_REDIRECT_TO=test@example.com (for testing)
@@ -44,11 +46,13 @@ class Settings(BaseSettings):
         alias="BACKEND_CORS_ORIGINS",
     )
     
+    email_provider: str = Field(default="smtp", alias="EMAIL_PROVIDER")
     smtp_host: Optional[str] = Field(default=None, alias="SMTP_HOST")
     smtp_port: Optional[int] = Field(default=587, alias="SMTP_PORT")
     smtp_username: Optional[str] = Field(default=None, alias="SMTP_USERNAME")
     smtp_password: Optional[str] = Field(default=None, alias="SMTP_PASSWORD")
     smtp_use_ssl: bool = Field(default=True, alias="SMTP_USE_SSL")
+    resend_api_key: Optional[str] = Field(default=None, alias="RESEND_API_KEY")
     email_from_name: Optional[str] = Field(default=None, alias="EMAIL_FROM_NAME")
     email_from_address: Optional[str] = Field(default=None, alias="EMAIL_FROM_ADDRESS")
     email_redirect_to: Optional[str] = Field(default=None, alias="EMAIL_REDIRECT_TO")

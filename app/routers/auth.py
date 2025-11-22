@@ -56,7 +56,8 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     try:
         send_email_verification(user.email, make_email_token(user.email, "verify"), code=code)
     except Exception as e:
-        print(f"Failed to send verification email: {e}")
+        import logging
+        logging.error(f"Failed to send verification email: {e}", exc_info=True)
 
     # Sign-in immediately
     return make_tokens(user.email, user.role.value)
@@ -135,7 +136,8 @@ def forgot(body: EmailOnly, db: Session = Depends(get_db)):
             from app.services.notify_email import send_reset_password
             send_reset_password(user.email, make_email_token(user.email, "reset"))
         except Exception as e:
-            print(f"Failed to send reset password email: {e}")
+            import logging
+            logging.error(f"Failed to send reset password email: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Failed to send reset password email. Please try again later.")
     return {"ok": True, "message": "If an account exists with this email, a password reset link has been sent."}
 
@@ -178,7 +180,8 @@ def send_verify(email: str, db: Session = Depends(get_db)):
         send_email_verification(user.email, link_token, code=code)
         return {"ok": True, "message": "Verification email sent. Check your inbox for the code and link."}
     except Exception as e:
-        print(f"Failed to send verification email: {e}")
+        import logging
+        logging.error(f"Failed to send verification email: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to send verification email. Please try again later.")
 
 @router.post("/verify-code")

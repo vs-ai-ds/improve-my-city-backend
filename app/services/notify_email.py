@@ -4,6 +4,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
+import httpx
 from app.core.config import settings
 
 FROM_NAME = settings.email_from_name
@@ -11,12 +12,14 @@ FROM_ADDR = settings.email_from_address
 
 EMAIL_REDIRECT_TO = settings.email_redirect_to
 EMAIL_DOMAIN_VERIFIED = settings.email_domain_verified
+EMAIL_PROVIDER = settings.email_provider.lower()
 
 SMTP_HOST = settings.smtp_host
 SMTP_PORT = settings.smtp_port
 SMTP_USERNAME = settings.smtp_username
 SMTP_PASSWORD = settings.smtp_password
 SMTP_USE_SSL = settings.smtp_use_ssl
+RESEND_API_KEY = settings.resend_api_key
 
 # ===================================================================
 # BASE TEMPLATE - official city look, compact spacing
@@ -118,6 +121,48 @@ def _send_email_via_smtp(to_email: str, subject: str, html_content: str):
         server.quit()
     except Exception as e:
         print(f"Failed to send email via SMTP: {e}")
+
+
+# ===================================================================
+# Helper: send email via Resend API
+# ===================================================================
+
+def _send_email_via_resend(to_email: str, subject: str, html_content: str):
+    """Send an email using Resend API."""
+    if not RESEND_API_KEY or not FROM_ADDR:
+        return
+
+    try:
+        response = httpx.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": f"{FROM_NAME} <{FROM_ADDR}>" if FROM_NAME else FROM_ADDR,
+                "to": [to_email],
+                "subject": subject,
+                "html": html_content,
+            },
+            timeout=15.0,
+        )
+        response.raise_for_status()
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to send email via Resend: {e}", exc_info=True)
+
+
+# ===================================================================
+# Main email sending function (routes to appropriate provider)
+# ===================================================================
+
+def _send_email(to_email: str, subject: str, html_content: str):
+    """Send an email using the configured provider (SMTP or Resend)."""
+    if EMAIL_PROVIDER == "resend":
+        _send_email_via_resend(to_email, subject, html_content)
+    else:
+        _send_email_via_smtp(to_email, subject, html_content)
 
 
 # ===================================================================
@@ -233,7 +278,7 @@ def send_email_verification(to_email: str, token: str, code: Optional[str] = Non
         """
 
     html = _get_template_base() % html_content
-    _send_email_via_smtp(actual_recipient, "Verify your email address", html)
+    _send_email(actual_recipient, "Verify your email address", html)
 
 
 # ===================================================================
@@ -258,7 +303,7 @@ def send_reset_password(to_email: str, token: str):
     """
 
     html = _get_template_base() % html_content
-    _send_email_via_smtp(actual_recipient, "Reset your password", html)
+    _send_email(actual_recipient, "Reset your password", html)
 
 
 # ===================================================================
@@ -289,7 +334,7 @@ def send_status_update(to_email: str, issue_id: int, status: str):
     """
 
     html = _get_template_base() % html_content
-    _send_email_via_smtp(actual_recipient, f"Issue #{issue_id} status update", html)
+    _send_email(actual_recipient, f"Issue #{issue_id} status update", html)
 
 
 # ===================================================================
@@ -299,14 +344,14 @@ def send_status_update(to_email: str, issue_id: int, status: str):
 def send_report_confirmation(to_email: str, issue_id: int, title: str):
     """Send confirmation email when a report is submitted."""
     actual_recipient, redirect_note = _get_recipient_and_note(to_email)
-    link = _build_url(f"issues/{issue_id}")
+    link = _build_url(f"?issue={issue_id}")
 
     html_content = f"""
     {redirect_note}
     <p>Hello,</p>
     <p>Thank you for submitting a report to <strong>Improve My City</strong>.</p>
     <p style="margin:6px 0;">
-      <strong>Ticket number:</strong> #{issue_id}<br/>
+      <strong>Issue number:</strong> #{issue_id}<br/>
       <strong>Title:</strong> {title}
     </p>
     <p>Our team has received your report and will keep you updated
@@ -315,4 +360,60 @@ def send_report_confirmation(to_email: str, issue_id: int, title: str):
     """
 
     html = _get_template_base() % html_content
-    _send_email_via_smtp(actual_recipient, f"Report submitted – Ticket #{issue_id}", html)
+    _send_email(actual_recipient, f"Report submitted – Ticket #{issue_id}", html)
+
+
+# ===================================================================
+# 5) Comment notification
+# ===================================================================
+
+def send_comment_notification(to_email: str, issue_id: int, issue_title: str, comment_author: str, comment_body: str):
+    """Send notification email when a comment is posted on an issue."""
+    actual_recipient, redirect_note = _get_recipient_and_note(to_email)
+    link = _build_url(f"?issue={issue_id}")
+
+    html_content = f"""
+    {redirect_note}
+    <p>Hello,</p>
+    <p>A new comment has been added to issue <strong>#{issue_id}</strong> in <strong>Improve My City</strong>.</p>
+    <p style="margin:6px 0;">
+      <strong>Issue:</strong> {issue_title}<br/>
+      <strong>Comment by:</strong> {comment_author}<br/>
+      <strong>Comment:</strong> {comment_body[:200]}{'...' if len(comment_body) > 200 else ''}
+    </p>
+    {_format_link_section(link, "View issue and comment")}
+    <p style="margin-top:8px;font-size:12px;color:#6b7280;">
+      You are receiving this notification because you are involved with this issue.
+    </p>
+    """
+
+    html = _get_template_base() % html_content
+    _send_email(actual_recipient, f"New comment on Issue #{issue_id}", html)
+
+
+# ===================================================================
+# 6) Assignment notification
+# ===================================================================
+
+def send_assignment_notification(to_email: str, issue_id: int, issue_title: str, assigned_by: str):
+    """Send notification email when an issue is assigned to staff."""
+    actual_recipient, redirect_note = _get_recipient_and_note(to_email)
+    link = _build_url(f"?issue={issue_id}")
+
+    html_content = f"""
+    {redirect_note}
+    <p>Hello,</p>
+    <p>You have been assigned to issue <strong>#{issue_id}</strong> in <strong>Improve My City</strong>.</p>
+    <p style="margin:6px 0;">
+      <strong>Issue:</strong> {issue_title}<br/>
+      <strong>Assigned by:</strong> {assigned_by}
+    </p>
+    <p>Please review the issue and take appropriate action.</p>
+    {_format_link_section(link, "View assigned issue")}
+    <p style="margin-top:8px;font-size:12px;color:#6b7280;">
+      You can update the status and add comments to keep the reporter informed.
+    </p>
+    """
+
+    html = _get_template_base() % html_content
+    _send_email(actual_recipient, f"Issue #{issue_id} assigned to you", html)

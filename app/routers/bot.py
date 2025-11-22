@@ -140,7 +140,8 @@ def handle_issue_status(issue_id: int, db: Session, user: Optional[User], allow_
     
     return ChatOut(
         reply=reply,
-        suggestions=["Show my issues", "What does 'in progress' mean?"]
+        suggestions=["View full details", "Show my issues", "What does 'in progress' mean?"],
+        state={"action": "view_issue", "issue_id": issue_id}
     )
 
 def handle_my_issues(db: Session, user: Optional[User]) -> ChatOut:
@@ -170,22 +171,37 @@ def handle_my_issues(db: Session, user: Optional[User]) -> ChatOut:
     
     return ChatOut(reply=reply, suggestions=suggestions)
 
+def _get_app_settings_safe(db: Session):
+    """Safely get AppSettings, handling missing columns."""
+    try:
+        settings = db.query(AppSettings).first()
+        return settings
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            from sqlalchemy import text
+            result = db.execute(text("SELECT allow_anonymous_reporting FROM app_settings LIMIT 1")).mappings().first()
+            if result:
+                class SimpleSettings:
+                    allow_anonymous_reporting = result.get('allow_anonymous_reporting', False)
+                return SimpleSettings()
+        except Exception:
+            pass
+        return None
+
 @router.post("/chat", response_model=ChatOut)
 def chat(payload: ChatIn, db: Session = Depends(get_db), user: Optional[User] = Depends(get_optional_user)):
     text = payload.message.strip().lower()
     
-    settings = db.query(AppSettings).first()
-    allow_anonymous = settings.allow_anonymous_reporting if settings else False
+    settings = _get_app_settings_safe(db)
+    allow_anonymous = getattr(settings, 'allow_anonymous_reporting', False) if settings else False
     
     issue_id = extract_issue_id(text)
     if issue_id:
         return handle_issue_status(issue_id, db, user, allow_anonymous)
-    
-    if any(k in text for k in ["how", "report", "submit", "raise an issue", "file a complaint"]):
-        return ChatOut(
-            reply="To report an issue, click the 'Report an issue' button on the dashboard. You'll select a category, location on the map, and optionally upload photos. You can report anonymously if enabled, or login for better tracking.",
-            suggestions=["What can I report?", "Do I need to login to report?"]
-        )
     
     if "my issues" in text or "my complaints" in text or "show my issues" in text:
         return handle_my_issues(db, user)
@@ -193,8 +209,22 @@ def chat(payload: ChatIn, db: Session = Depends(get_db), user: Optional[User] = 
     if "status" in text and ("issue" in text or "ticket" in text or "complaint" in text):
         return ChatOut(
             reply="Sure, tell me the issue number (for example: #123 or issue 123).",
-            suggestions=["Issue #123", "I don't know my issue number"],
+            suggestions=["Issue #123", "I don't know my issue number", "Show my issues"],
             state={"expecting_issue_id": True}
+        )
+    
+    report_keywords = ["how to report", "how do i report", "report an issue", "submit", "raise an issue", "file a complaint", "new issue", "create issue"]
+    if any(k in text for k in report_keywords) and "my issues" not in text and "show my" not in text:
+        if not user and not allow_anonymous:
+            return ChatOut(
+                reply="To report an issue, you need to login first. Click the 'Sign in' button at the top right.",
+                suggestions=["Open login", "How do I login?", "What can I report?"],
+                state={"action": "open_login", "open_report_after_auth": True}
+            )
+        return ChatOut(
+            reply="To report an issue, click the 'Report an issue' button on the dashboard. You'll select a category, location on the map, and optionally upload photos. You can report anonymously if enabled, or login for better tracking.",
+            suggestions=["What can I report?", "Do I need to login to report?", "Report An Issue"],
+            state={"action": "open_report"}
         )
     
     if "anonymous" in text:
@@ -208,10 +238,11 @@ def chat(payload: ChatIn, db: Session = Depends(get_db), user: Optional[User] = 
             suggestions=["Login help", "How do I report an issue?"]
         )
     
-    if "login" in text or "sign in" in text:
+    if "login" in text or "sign in" in text or "log in" in text:
         return ChatOut(
             reply="To login, click the 'Sign in' button at the top right. If you haven't verified your email yet, you'll receive a verification link/code by email.",
-            suggestions=["I didn't receive verification email", "How to reset password"]
+            suggestions=["I didn't receive verification email", "How to reset password", "Open login"],
+            state={"action": "open_login"}
         )
     
     if "verification" in text or "code" in text or "verify" in text:

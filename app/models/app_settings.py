@@ -14,11 +14,8 @@ class AppSettings(Base):
 
     allow_anonymous_reporting: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     require_email_verification: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    admin_open_registration: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     auto_assign_issues: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
-    email_from: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    email_from_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     features: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # extra flags, e.g. {"chatbot": true}
     
     sla_hours: Mapped[int] = mapped_column(Integer, default=48, server_default="48")
