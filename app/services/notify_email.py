@@ -199,6 +199,8 @@ def _build_url(path: str) -> str:
     path = path.lstrip("/")
 
     if base:
+        if not base.startswith("http://") and not base.startswith("https://"):
+            base = f"https://{base}"
         return f"{base}/{path}" if path else base
 
     # Fallback: relative path, still visible + copy-pastable
@@ -339,7 +341,7 @@ def send_status_update(to_email: str, issue_id: int, status: str):
 def send_report_confirmation(to_email: str, issue_id: int, title: str):
     """Send confirmation email when a report is submitted."""
     actual_recipient, redirect_note = _get_recipient_and_note(to_email)
-    link = _build_url(f"?issue={issue_id}")
+    link = _build_url(f"issues/{issue_id}")
 
     html_content = f"""
     {redirect_note}
@@ -365,7 +367,7 @@ def send_report_confirmation(to_email: str, issue_id: int, title: str):
 def send_comment_notification(to_email: str, issue_id: int, issue_title: str, comment_author: str, comment_body: str):
     """Send notification email when a comment is posted on an issue."""
     actual_recipient, redirect_note = _get_recipient_and_note(to_email)
-    link = _build_url(f"?issue={issue_id}")
+    link = _build_url(f"issues/{issue_id}")
 
     html_content = f"""
     {redirect_note}
@@ -393,7 +395,7 @@ def send_comment_notification(to_email: str, issue_id: int, issue_title: str, co
 def send_assignment_notification(to_email: str, issue_id: int, issue_title: str, assigned_by: str):
     """Send notification email when an issue is assigned to staff."""
     actual_recipient, redirect_note = _get_recipient_and_note(to_email)
-    link = _build_url(f"?issue={issue_id}")
+    link = _build_url(f"issues/{issue_id}")
 
     html_content = f"""
     {redirect_note}

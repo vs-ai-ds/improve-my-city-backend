@@ -876,6 +876,13 @@ def update_status(
             detail="Only admins/staff or assigned staff can update status",
         )
 
+    # Block status changes for resolved issues
+    if obj.status == IssueStatus.resolved:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot change status of a resolved issue",
+        )
+
     # Require assignment before moving to in_progress
     if new_status == "in_progress" and not obj.assigned_to_id:
         raise HTTPException(
