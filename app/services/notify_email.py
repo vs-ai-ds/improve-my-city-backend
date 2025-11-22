@@ -195,7 +195,7 @@ def _build_url(path: str) -> str:
     If not configured, fall back to a site-relative path (still shown
     as a copy-paste URL in the email).
     """
-    base = (settings.frontend_base_url or "").rstrip("/")
+    base = (settings.frontend_base_url or "").strip().rstrip("/")
     path = path.lstrip("/")
 
     if base:

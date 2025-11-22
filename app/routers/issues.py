@@ -115,7 +115,7 @@ def _send_assignment_notifications_safe(
         db.close()
 
 
-def _send_comment_notifications_safe(issue_id: int, comment_author_id: int):
+def _send_comment_notifications_safe(issue_id: int, comment_author_id: int, comment_body: str = ""):
     db = SessionLocal()
     try:
         from app.services.notify_email import send_comment_notification
@@ -143,6 +143,18 @@ def _send_comment_notifications_safe(issue_id: int, comment_author_id: int):
             return
 
         comment_author_name = comment_author.name or comment_author.email or "Anonymous"
+        
+        if not comment_body:
+            from sqlalchemy import text
+            latest_comment = db.execute(
+                text(
+                    "SELECT body FROM issue_comments WHERE issue_id=:iid AND user_id=:uid ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"iid": issue_id, "uid": comment_author_id},
+            ).scalar()
+            if latest_comment:
+                comment_body = latest_comment
+        
         recipients = set()
         recipient_users = []
 
@@ -158,6 +170,17 @@ def _send_comment_notifications_safe(issue_id: int, comment_author_id: int):
                 recipients.add(assigned.email)
                 recipient_users.append(assigned)
 
+        admins = (
+            db.query(User)
+            .filter(User.role.in_([UserRole.admin, UserRole.super_admin]))
+            .all()
+        )
+        for admin in admins:
+            if admin.email and admin.email != comment_author.email:
+                recipients.add(admin.email)
+                if admin not in recipient_users:
+                    recipient_users.append(admin)
+
         for recipient in recipient_users:
             if auto_email and recipient.email:
                 try:
@@ -166,6 +189,7 @@ def _send_comment_notifications_safe(issue_id: int, comment_author_id: int):
                         issue.id,
                         issue.title,
                         comment_author_name,
+                        comment_body,
                     )
                 except Exception:
                     pass
@@ -1227,109 +1251,12 @@ def add_comment(
     )
     db.commit()
 
-    # Send email and push notifications
-    from app.services.notify_email import send_comment_notification
-    from app.services.notify_push import send_push
-    from app.models.push import PushSubscription
-
-    settings = _get_app_settings(db)
-    auto_email = (
-        getattr(settings, "auto_email_on_status_change", True)
-        if settings
-        else True
+    background_tasks.add_task(
+        _send_comment_notifications_safe,
+        issue_id=issue_id,
+        comment_author_id=user.id,
+        comment_body=body,
     )
-    push_enabled = (
-        getattr(settings, "push_notifications_enabled", False)
-        if settings
-        else False
-    )
-    send_notifications = auto_email or push_enabled
-
-    if send_notifications:
-        comment_author = user.name or user.email or "Anonymous"
-        recipients = set()
-        recipient_users = []
-
-        # Add issue creator
-        if issue.created_by_id:
-            creator = (
-                db.query(User).filter(User.id == issue.created_by_id).first()
-            )
-            if (
-                creator
-                and creator.email
-                and creator.email != user.email
-            ):
-                recipients.add(creator.email)
-                recipient_users.append(creator)
-
-        # Add assigned staff
-        if issue.assigned_to_id:
-            assigned = (
-                db.query(User)
-                .filter(User.id == issue.assigned_to_id)
-                .first()
-            )
-            if (
-                assigned
-                and assigned.email
-                and assigned.email != user.email
-            ):
-                recipients.add(assigned.email)
-                if assigned not in recipient_users:
-                    recipient_users.append(assigned)
-
-        # Add all admins and super_admins
-        admins = (
-            db.query(User)
-            .filter(User.role.in_([UserRole.admin, UserRole.super_admin]))
-            .all()
-        )
-        for admin in admins:
-            if admin.email and admin.email != user.email:
-                recipients.add(admin.email)
-                if admin not in recipient_users:
-                    recipient_users.append(admin)
-
-        # Send emails
-        if auto_email:
-            for recipient_email in recipients:
-                try:
-                    send_comment_notification(
-                        recipient_email,
-                        issue_id,
-                        issue.title,
-                        comment_author,
-                        body,
-                    )
-                except Exception:
-                    pass  # Don't fail comment creation if email fails
-
-        # Send push notifications
-        if push_enabled:
-            for recipient_user in recipient_users:
-                subs = (
-                    db.query(PushSubscription)
-                    .filter(PushSubscription.user_id == recipient_user.id)
-                    .all()
-                )
-                for s in subs:
-                    try:
-                        send_push(
-                            {
-                                "endpoint": s.endpoint,
-                                "keys": {
-                                    "p256dh": s.p256dh,
-                                    "auth": s.auth,
-                                },
-                            },
-                            {
-                                "title": "New Comment",
-                                "body": f"New comment on Issue #{issue_id} by {comment_author}",
-                            },
-                        )
-                    except Exception:
-                        pass
 
     # Fetch the created comment
     creator_id = issue.created_by_id
