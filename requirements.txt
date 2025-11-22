@@ -22,6 +22,8 @@ httpx==0.28.1
 
 slowapi==0.1.9
 
+resend==2.19.0
+
 passlib[bcrypt]==1.7.4
 bcrypt==3.2.2
 PyJWT==2.10.1

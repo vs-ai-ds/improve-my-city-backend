@@ -4,7 +4,9 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
-import httpx
+
+import resend
+
 from app.core.config import settings
 
 FROM_NAME = settings.email_from_name
@@ -133,21 +135,14 @@ def _send_email_via_resend(to_email: str, subject: str, html_content: str):
         return
 
     try:
-        response = httpx.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {RESEND_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "from": f"{FROM_NAME} <{FROM_ADDR}>" if FROM_NAME else FROM_ADDR,
-                "to": [to_email],
-                "subject": subject,
-                "html": html_content,
-            },
-            timeout=15.0,
-        )
-        response.raise_for_status()
+        resend.api_key = RESEND_API_KEY
+        params = {
+            "from": f"{FROM_NAME} <{FROM_ADDR}>" if FROM_NAME else FROM_ADDR,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_content,
+        }
+        resend.Emails.send(params)
     except Exception as e:
         import logging
         logging.error(f"Failed to send email via Resend: {e}", exc_info=True)
