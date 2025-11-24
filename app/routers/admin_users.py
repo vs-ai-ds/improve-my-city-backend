@@ -106,18 +106,17 @@ def update_admin_user(user_id:int, payload:dict=Body(...), db:Session=Depends(ge
     raise HTTPException(404, "User not found")
   target_role = target_user[0]
   
-  if me.id == user_id:
-    raise HTTPException(400, "Cannot modify yourself")
-  
   if role is not None:
+    if me.id == user_id:
+      raise HTTPException(400, "Cannot change your own role")
     if me.role != "super_admin":
       raise HTTPException(403, "Only super admins can change roles")
     if role not in ("citizen","staff","admin","super_admin"):
       raise HTTPException(400, "bad_role")
-    if me.id == user_id and role != "super_admin":
-      raise HTTPException(400, "cannot_change_own_role")
   
   if is_active is not None:
+    if me.id == user_id:
+      raise HTTPException(400, "Cannot modify yourself")
     if me.role == "staff":
       if target_role != "citizen":
         raise HTTPException(403, "Staff can only activate/deactivate citizens")
@@ -172,7 +171,7 @@ def delete_admin_user(user_id:int, db:Session=Depends(get_db), me=Depends(get_cu
   return {"ok": True}
 
 @router.post("/{user_id}/reset-password", dependencies=[Depends(require_role("admin","super_admin","staff"))])
-def trigger_password_reset(user_id: int, db: Session = Depends(get_db)):
+def trigger_password_reset(user_id: int, db: Session = Depends(get_db), me=Depends(get_current_user)):
     from app.models.user import User
     from app.services.notify_email import send_reset_password
     from app.core.security import make_email_token
@@ -180,6 +179,9 @@ def trigger_password_reset(user_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(404, "User not found")
+    
+    if me.id != user_id and me.role not in ("admin", "super_admin", "staff"):
+        raise HTTPException(403, "Insufficient permissions")
     
     try:
         token = make_email_token(user.email, "reset")
