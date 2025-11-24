@@ -7,7 +7,7 @@ from app.core.security import require_role, get_current_user
 
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
 
-@router.get("", dependencies=[Depends(require_role("admin","super_admin"))])
+@router.get("", dependencies=[Depends(require_role("admin","super_admin","staff"))])
 def list_users(
     db: Session = Depends(get_db),
     q: str | None = None,
@@ -97,14 +97,38 @@ def create_user(payload: dict = Body(...), db: Session = Depends(get_db)):
   db.commit()
   return {"ok": True}
 
-@router.put("/{user_id}", dependencies=[Depends(require_role("admin","super_admin"))])
+@router.put("/{user_id}", dependencies=[Depends(require_role("admin","super_admin","staff"))])
 def update_admin_user(user_id:int, payload:dict=Body(...), db:Session=Depends(get_db), me=Depends(get_current_user)):
   role = payload.get("role"); is_active = payload.get("is_active")
-  if role and role not in ("citizen","staff","admin","super_admin"):
-    raise HTTPException(400,"bad_role")
-  # prevent demoting last super_admin or deleting self etc — basic guard
-  if me.id == user_id and role and role != "super_admin":
-    raise HTTPException(400,"cannot_change_own_role")
+  
+  target_user = db.execute(text("select role from users where id=:id"), {"id": user_id}).first()
+  if not target_user:
+    raise HTTPException(404, "User not found")
+  target_role = target_user[0]
+  
+  if me.id == user_id:
+    raise HTTPException(400, "Cannot modify yourself")
+  
+  if role is not None:
+    if me.role != "super_admin":
+      raise HTTPException(403, "Only super admins can change roles")
+    if role not in ("citizen","staff","admin","super_admin"):
+      raise HTTPException(400, "bad_role")
+    if me.id == user_id and role != "super_admin":
+      raise HTTPException(400, "cannot_change_own_role")
+  
+  if is_active is not None:
+    if me.role == "staff":
+      if target_role != "citizen":
+        raise HTTPException(403, "Staff can only activate/deactivate citizens")
+    elif me.role == "admin":
+      if target_role not in ("staff", "citizen"):
+        raise HTTPException(403, "Admin can only activate/deactivate staff and citizens")
+    elif me.role == "super_admin":
+      pass
+    else:
+      raise HTTPException(403, "Insufficient permissions")
+  
   update_data = {}
   if role is not None:
     update_data["role"] = role
@@ -119,25 +143,35 @@ def update_admin_user(user_id:int, payload:dict=Body(...), db:Session=Depends(ge
   db.commit()
   return {"ok": True}
 
-@router.delete("/{user_id}", dependencies=[Depends(require_role("super_admin"))])
+@router.delete("/{user_id}", dependencies=[Depends(require_role("admin","super_admin"))])
 def delete_admin_user(user_id:int, db:Session=Depends(get_db), me=Depends(get_current_user)):
   if me.id == user_id:
-    raise HTTPException(400,"cannot_delete_self")
-  r = db.execute(text("select role from users where id=:id"), {"id": user_id}).first()
-  if not r: raise HTTPException(404,"not_found")
-  if r[0] == "super_admin": raise HTTPException(400,"cannot_delete_super_admin")
+    raise HTTPException(400, "Cannot delete yourself")
   
-  # Check for transactional records (issues or comments) for citizens
-  if r[0] == "citizen":
-    issue_count = db.execute(text("select count(*) from issues where created_by_id=:id"), {"id": user_id}).scalar()
-    comment_count = db.execute(text("select count(*) from issue_comments where user_id=:id"), {"id": user_id}).scalar()
-    if issue_count > 0 or comment_count > 0:
-      raise HTTPException(400, f"Cannot delete citizen with transactional records. {issue_count} issue(s) and {comment_count} comment(s) found. Deactivate instead.")
+  target_user = db.execute(text("select role from users where id=:id"), {"id": user_id}).first()
+  if not target_user:
+    raise HTTPException(404, "User not found")
+  target_role = target_user[0]
   
-  db.execute(text("delete from users where id=:id"), {"id":user_id})
-  db.commit(); return {"ok": True}
+  if target_role == "super_admin":
+    raise HTTPException(400, "Cannot delete super admin")
+  
+  if me.role == "admin":
+    if target_role not in ("staff", "citizen"):
+      raise HTTPException(403, "Admin can only delete staff and citizens")
+  elif me.role != "super_admin":
+    raise HTTPException(403, "Only super admins and admins can delete users")
+  
+  issue_count = db.execute(text("select count(*) from issues where created_by_id=:id or assigned_to_id=:id"), {"id": user_id}).scalar()
+  comment_count = db.execute(text("select count(*) from issue_comments where user_id=:id"), {"id": user_id}).scalar()
+  if issue_count > 0 or comment_count > 0:
+    raise HTTPException(400, f"Cannot delete user with transactional records. {issue_count} issue(s) and {comment_count} comment(s) found. Deactivate instead.")
+  
+  db.execute(text("delete from users where id=:id"), {"id": user_id})
+  db.commit()
+  return {"ok": True}
 
-@router.post("/{user_id}/reset-password", dependencies=[Depends(require_role("admin","super_admin"))])
+@router.post("/{user_id}/reset-password", dependencies=[Depends(require_role("admin","super_admin","staff"))])
 def trigger_password_reset(user_id: int, db: Session = Depends(get_db)):
     from app.models.user import User
     from app.services.notify_email import send_reset_password
@@ -160,6 +194,7 @@ def trigger_password_reset(user_id: int, db: Session = Depends(get_db)):
 def get_user_stats(user_id: int, db: Session = Depends(get_db)):
     from app.models.issue import Issue
     from app.models.issue_activity import IssueActivity
+    from app.models.user import User
     from sqlalchemy import func
     
     user = db.query(User).filter(User.id == user_id).first()
