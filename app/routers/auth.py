@@ -5,30 +5,22 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.schemas.auth import RegisterIn, LoginIn, TokenPair, EmailOnly, ResetIn
-from app.core.security import hash_password, verify_password, make_tokens, get_current_user
+from app.core.security import (
+    hash_password,
+    verify_password,
+    make_tokens,
+    get_current_user,
+    require_verified_user,
+    make_email_token,
+    parse_email_token,
+)
 from app.core.config import settings
-import time, jwt
 from app.services.notify_email import send_email_verification
+import jwt
 import random, string
 from datetime import datetime, timezone, timedelta
-from app.core.security import require_verified_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-# Simple email verification / reset tokens using JWT
-EMAIL_TTL = 3600
-def make_email_token(email: str, purpose: str):
-    return jwt.encode(
-        {"sub": email, "purpose": purpose, "exp": int(time.time()) + EMAIL_TTL},
-        settings.jwt_secret,
-        algorithm="HS256",
-    )
-
-def parse_email_token(token: str, purpose: str):
-    data = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-    if data.get("purpose") != purpose:
-        raise Exception("bad purpose")
-    return data["sub"]
 
 @router.post("/register", response_model=TokenPair)
 def register(body: RegisterIn, db: Session = Depends(get_db)):

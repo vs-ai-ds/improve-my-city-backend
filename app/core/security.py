@@ -13,7 +13,21 @@ from app.models.user import User
 ALGO = "HS256"
 ACCESS_TTL = 15 * 60
 REFRESH_TTL = 7 * 24 * 3600
+EMAIL_TTL = 3600
 bearer = HTTPBearer(auto_error=False)
+
+def make_email_token(email: str, purpose: str) -> str:
+    return jwt.encode(
+        {"sub": email, "purpose": purpose, "exp": int(time.time()) + EMAIL_TTL},
+        settings.jwt_secret,
+        algorithm=ALGO,
+    )
+
+def parse_email_token(token: str, purpose: str) -> str:
+    data = jwt.decode(token, settings.jwt_secret, algorithms=[ALGO])
+    if data.get("purpose") != purpose:
+        raise Exception("bad purpose")
+    return data["sub"]
 
 def hash_password(raw: str) -> str:
     return bcrypt_sha256.hash(raw)
