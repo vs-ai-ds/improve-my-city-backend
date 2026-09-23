@@ -97,19 +97,23 @@ def create_user(payload: dict = Body(...), db: Session = Depends(get_db)):
   db.commit()
   return {"ok": True}
 
+def _role_value(role) -> str:
+  return role.value if hasattr(role, "value") else str(role)
+
 @router.put("/{user_id}", dependencies=[Depends(require_role("admin","super_admin","staff"))])
 def update_admin_user(user_id:int, payload:dict=Body(...), db:Session=Depends(get_db), me=Depends(get_current_user)):
   role = payload.get("role"); is_active = payload.get("is_active")
+  my_role = _role_value(me.role)
   
   target_user = db.execute(text("select role from users where id=:id"), {"id": user_id}).first()
   if not target_user:
     raise HTTPException(404, "User not found")
-  target_role = target_user[0]
+  target_role = _role_value(target_user[0])
   
   if role is not None:
     if me.id == user_id:
       raise HTTPException(400, "Cannot change your own role")
-    if me.role != "super_admin":
+    if my_role != "super_admin":
       raise HTTPException(403, "Only super admins can change roles")
     if role not in ("citizen","staff","admin","super_admin"):
       raise HTTPException(400, "bad_role")
@@ -117,13 +121,13 @@ def update_admin_user(user_id:int, payload:dict=Body(...), db:Session=Depends(ge
   if is_active is not None:
     if me.id == user_id:
       raise HTTPException(400, "Cannot modify yourself")
-    if me.role == "staff":
+    if my_role == "staff":
       if target_role != "citizen":
         raise HTTPException(403, "Staff can only activate/deactivate citizens")
-    elif me.role == "admin":
+    elif my_role == "admin":
       if target_role not in ("staff", "citizen"):
         raise HTTPException(403, "Admin can only activate/deactivate staff and citizens")
-    elif me.role == "super_admin":
+    elif my_role == "super_admin":
       pass
     else:
       raise HTTPException(403, "Insufficient permissions")
@@ -146,19 +150,20 @@ def update_admin_user(user_id:int, payload:dict=Body(...), db:Session=Depends(ge
 def delete_admin_user(user_id:int, db:Session=Depends(get_db), me=Depends(get_current_user)):
   if me.id == user_id:
     raise HTTPException(400, "Cannot delete yourself")
+  my_role = _role_value(me.role)
   
   target_user = db.execute(text("select role from users where id=:id"), {"id": user_id}).first()
   if not target_user:
     raise HTTPException(404, "User not found")
-  target_role = target_user[0]
+  target_role = _role_value(target_user[0])
   
   if target_role == "super_admin":
     raise HTTPException(400, "Cannot delete super admin")
   
-  if me.role == "admin":
+  if my_role == "admin":
     if target_role not in ("staff", "citizen"):
       raise HTTPException(403, "Admin can only delete staff and citizens")
-  elif me.role != "super_admin":
+  elif my_role != "super_admin":
     raise HTTPException(403, "Only super admins and admins can delete users")
   
   issue_count = db.execute(text("select count(*) from issues where created_by_id=:id or assigned_to_id=:id"), {"id": user_id}).scalar()
@@ -180,7 +185,8 @@ def trigger_password_reset(user_id: int, db: Session = Depends(get_db), me=Depen
     if not user:
         raise HTTPException(404, "User not found")
     
-    if me.id != user_id and me.role not in ("admin", "super_admin", "staff"):
+    my_role = _role_value(me.role)
+    if me.id != user_id and my_role not in ("admin", "super_admin", "staff"):
         raise HTTPException(403, "Insufficient permissions")
     
     try:
