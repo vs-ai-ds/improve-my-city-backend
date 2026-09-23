@@ -14,11 +14,12 @@ ALGO = "HS256"
 ACCESS_TTL = 15 * 60
 REFRESH_TTL = 7 * 24 * 3600
 EMAIL_TTL = 3600
+INVITE_TTL = 7 * 24 * 3600
 bearer = HTTPBearer(auto_error=False)
 
-def make_email_token(email: str, purpose: str) -> str:
+def make_email_token(email: str, purpose: str, ttl: int | None = None) -> str:
     return jwt.encode(
-        {"sub": email, "purpose": purpose, "exp": int(time.time()) + EMAIL_TTL},
+        {"sub": email, "purpose": purpose, "exp": int(time.time()) + (ttl if ttl is not None else EMAIL_TTL)},
         settings.jwt_secret,
         algorithm=ALGO,
     )

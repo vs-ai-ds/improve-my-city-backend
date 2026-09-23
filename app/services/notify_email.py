@@ -303,6 +303,30 @@ def send_reset_password(to_email: str, token: str):
     _send_email(actual_recipient, "Reset your password", html)
 
 
+def send_staff_invite(to_email: str, token: str, role: str = "staff", name: str | None = None):
+    """Invite a newly created staff/admin to set their password (reuses reset-password page)."""
+    actual_recipient, redirect_note = _get_recipient_and_note(to_email)
+    link = _build_url(f"reset-password?token={token}")
+    role_label = role.replace("_", " ")
+    greeting = f"Hello {name}," if name else "Hello,"
+
+    html_content = f"""
+    {redirect_note}
+    <p>{greeting}</p>
+    <p>You have been added to <strong>Improve My City</strong> as
+       <strong>{role_label}</strong>.</p>
+    <p>To activate your account, please set your password using the link below:</p>
+    {_format_link_section(link, "Set your password")}
+    <p style="margin-top:8px;font-size:12px;color:#6b7280;">
+      This link is valid for <strong>7 days</strong>.
+      If you were not expecting this invitation, you can ignore this email.
+    </p>
+    """
+
+    html = _get_template_base() % html_content
+    _send_email(actual_recipient, "You're invited to Improve My City — set your password", html)
+
+
 # ===================================================================
 # 3) Status update on an issue
 # ===================================================================
